@@ -228,6 +228,7 @@ function renderStream() {
   btn.classList.toggle('danger', live || busy);
   btn.classList.toggle('primary', !(live || busy));
   show($('#btn-switch'), live);
+  if (!live) { show($('#st-fps'), false); if (!busy) show($('#st-tip'), false); }
   const srcLine = $('#st-source');
   show(srcLine, (live || busy) && !!stState.source);
   srcLine.textContent = stState.source ? `${stState.source} · ${stState.quality || ''}${stState.encoder ? ' · ' + stState.encoder : ''}` : '';
@@ -245,6 +246,36 @@ api.stream.onState((s) => {
   if (s.state === 'erro') toast(String(s.detail || 'Erro').split('\n')[0], 7000);
 });
 api.stream.onNotice((m) => toast(m, 6000));
+
+// FPS real: quantos quadros a captura produz e quantos saem do codificador
+api.stream.onFps((f) => {
+  const el = $('#st-fps');
+  if (!f) { show(el, false); return; }
+  const low = (n) => (n < f.target - 6 ? ' class="low"' : '');
+  el.innerHTML = `capturando <b${low(f.capFps)}>${f.capFps}</b> · enviando <b${low(f.encFps)}>${f.encFps}</b> de ${f.target} FPS`;
+  show(el, stState.state === 'ao-vivo');
+  if (f.hint) showFpsTip(f.hint);
+});
+function showFpsTip(h) {
+  const tip = $('#st-tip'), btn = $('#btn-tip');
+  const last = cfg.lastStream || {};
+  if (h.kind === 'capture') {
+    $('#st-tip-text').textContent = `O jogo está tomando a placa de vídeo: a captura só consegue ~${h.avg} FPS, e isso aparece como engasgo para quem assiste. Em 30 FPS fica liso (é o que o Discord faz). Ou limite o FPS do jogo.`;
+    btn.textContent = 'Transmitir a 30 FPS (liso)';
+    btn.onclick = () => { show(tip, false); restartWith(last.quality && last.quality.startsWith('720') ? '720p60' : '1080p30'); };
+  } else {
+    $('#st-tip-text').textContent = `O codificador não está dando conta (~${h.avg} FPS saindo). Em 720p fica liso.`;
+    btn.textContent = 'Transmitir em 720p';
+    btn.onclick = () => { show(tip, false); restartWith('720p60'); };
+  }
+  show(tip, true);
+}
+async function restartWith(quality) {
+  const last = cfg.lastStream || {};
+  const r = await api.stream.start({ kind: last.kind, sourceName: last.sourceName, audio: last.audio || 'auto', quality });
+  cfg = await api.cfg.get();
+  if (!r.ok) toast(r.error, 7000); else toast('Reiniciando a transmissão com a qualidade nova…');
+}
 
 $('#btn-transmit').addEventListener('click', async () => {
   if (stState.state === 'ao-vivo' || stState.state === 'iniciando') {

@@ -201,3 +201,9 @@ body.full .banners { display: none; }
 .stats .verdict.rede { color: #ff9a8d; }
 .stats .verdict.origem { color: #ffc966; }
 .stats .verdict.local { color: #9ec5ff; }
+
+/* FPS real da captura e sugestão de 30 FPS */
+.st-fps { margin: -4px 0 10px; font: 12px "Cascadia Mono", Consolas, monospace; color: var(--muted); }
+.st-fps b { color: var(--text); font-weight: 600; }
+.st-fps .low { color: #ffc966; }
+.st-tip { display: grid; gap: 8px; background: #2b2210; border: 1px solid #ffb02e55; border-radius: 10px; padding: 10px; margin: 0 0 10px; font-size: 12.5px; color: #ffe9c2; }

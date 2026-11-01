@@ -193,6 +193,41 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
     });
   }
 
+  /* ---------- medidor de FPS real (o que a captura produz e o que sai do codificador) ----------
+   * Se o jogo estiver tomando a placa, a captura entrega menos quadros que o pedido e a transmissão engasga.
+   * Igual o Discord, quando isso acontece por vários segundos a gente sugere 30 FPS, que fica liso.
+   */
+  function startMeter(p) {
+    let cap = 0, enc = 0;
+    const hist = [];
+    let suggested = false;
+    const target = (QUALITY[current.quality] || QUALITY['1080p60']).fps;
+    const timer = setInterval(() => {
+      if (p !== proc) return clearInterval(timer);
+      const sample = { cap, enc };
+      cap = 0; enc = 0;
+      if (!sample.cap && !sample.enc) return; // ainda sem quadros (conectando) ou -v sem saída
+      hist.push(sample); if (hist.length > 8) hist.shift();
+      const avg = (k) => Math.round(hist.reduce((a, x) => a + x[k], 0) / hist.length);
+      const info = { capFps: sample.cap, encFps: sample.enc, target };
+      // sugestão: em 60 FPS, a captura ficando entre 15 e 52 por 8 s seguidos = jogo pesando demais
+      if (!suggested && target >= 60 && hist.length === 8) {
+        const c = avg('cap'), e = avg('enc');
+        if (c >= 15 && c < 52) { suggested = true; info.hint = { kind: 'capture', avg: c }; }
+        else if (c >= 55 && e < c - 8) { suggested = true; info.hint = { kind: 'encoder', avg: e }; }
+      }
+      send('stream:fps', info);
+    }, 1000);
+    return {
+      feed(line) {
+        if (line.includes('capmeter: last-message')) { cap++; return true; }
+        if (line.includes('encmeter: last-message')) { enc++; return true; }
+        return /last-message =/.test(line); // outras notificações do -v não interessam
+      },
+      stop() { clearInterval(timer); send('stream:fps', null); },
+    };
+  }
+
   /* ---------- prioridade da captura ----------
    * Com o jogo usando 100% da placa de vídeo, o Windows deixa a captura por último na fila e os quadros
    * atrasam (é o "FPS caindo na transmissão"). O OBS resolve subindo a prioridade na GPU; aqui fazemos igual:
@@ -214,7 +249,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
   function buildPipeline({ source, audio, audioPid, quality, encoder, endpoint, token }) {
     const Q = QUALITY[quality] || QUALITY['1080p60'];
     const enc = ENCODERS.find((e) => e.id === encoder.id);
-    const encStr = enc[encoder.variant || 'full'](Q.kbps, Q.fps * 2); // quadro-chave a cada 2 s
+    const encStr = enc[encoder.variant || 'full'](Q.kbps, Q.fps); // quadro-chave a cada 1 s (recupera rápido de engasgos)
 
     const src = source.kind === 'window'
       ? `d3d11screencapturesrc window-handle=${source.hwnd} capture-api=wgc window-capture-mode=client show-cursor=true show-border=false`
@@ -228,9 +263,11 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
 
     const video = [
       src, `! video/x-raw(memory:D3D11Memory),framerate=${Q.fps}/1`,
+      '! identity name=capmeter silent=false',
       '! queue max-size-buffers=3 leaky=downstream',
       `! ${toEncoder}`,
       `! ${encStr}`,
+      '! identity name=encmeter silent=false',
       '! h264parse config-interval=-1',
       '! rtph264pay pt=96 config-interval=-1 aggregate-mode=zero-latency',
       '! application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000',
@@ -317,11 +354,17 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     lastErrors = [];
     setState({ state: 'iniciando', detail: 'Conectando à sala…' });
 
-    const p = spawn(bin('gst-launch-1.0'), ['-e', ...split(pipeline)], { env: env(), windowsHide: true });
+    const p = spawn(bin('gst-launch-1.0'), ['-e', '-v', ...split(pipeline)], { env: env(), windowsHide: true });
     proc = p;
     boostPriority(p.pid);
+    const meter = startMeter(p);
+    let partial = '';
     const onData = (d) => {
-      for (const line of String(d).split(/\r?\n/).filter(Boolean)) {
+      const lines = (partial + String(d)).split(/\r?\n/);
+      partial = lines.pop(); // última linha pode vir cortada
+      for (const line of lines) {
+        if (!line) continue;
+        if (meter.feed(line)) continue; // linha de contagem de quadros
         if (/ERROR|erroneous|WARN/.test(line)) { lastErrors.push(line); if (lastErrors.length > 40) lastErrors.shift(); log(line); }
       }
     };
@@ -331,6 +374,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     p.on('exit', (code) => {
       if (p !== proc) return;
       proc = null;
+      meter.stop();
       clearInterval(liveCheck);
       log(`motor saiu (código ${code})`);
       if (!wantLive) { setState({ state: 'parado' }); return; }

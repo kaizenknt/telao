@@ -1,4 +1,5 @@
 // Player WHEP: assiste uma transmissão do MediaMTX via WebRTC, com reconexão automática.
+const SMOOTH_MS = 120; // buffer de suavização do player (ms)
 class WhepPlayer {
   constructor(video, { onStatus, onStats } = {}) {
     this.video = video;
@@ -58,6 +59,10 @@ class WhepPlayer {
 
     const stream = new MediaStream();
     pc.ontrack = (ev) => {
+      // Buffer de suavização (como o Discord): segura ~120 ms para absorver a oscilação da internet.
+      // Troca um pouquinho de atraso por imagem lisa, sem engasgos.
+      try { ev.receiver.jitterBufferTarget = SMOOTH_MS; } catch {}
+      try { ev.receiver.playoutDelayHint = SMOOTH_MS / 1000; } catch {}
       stream.addTrack(ev.track);
       if (this.video.srcObject !== stream) this.video.srcObject = stream;
       this.video.play().catch(() => {});

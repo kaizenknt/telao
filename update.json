@@ -1,8 +1,8 @@
 {
-  "version": "1.4.1",
+  "version": "1.5.0",
   "full": false,
   "download": "https://github.com/kaizenknt/telao#baixar",
-  "notes": "Captura com prioridade alta na placa de vídeo (menos queda de FPS em jogo pesado) e estatísticas que dizem de onde vem a queda.",
+  "notes": "Imagem mais lisa: buffer de suavização no player, FPS real da captura com sugestão de 30 FPS quando o jogo pesa, e recuperação mais rápida de engasgos.",
   "files": [
     "src/assets/icon.ico",
     "src/assets/icon.png",

@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('telao', {
   stream: {
     sources: call('stream:sources'), start: call('stream:start'), stop: call('stream:stop'), state: call('stream:state'),
     qualities: call('stream:qualities'), diagnose: call('stream:diagnose'), openLog: call('stream:openLog'),
-    onState: on('stream:state'), onNotice: on('stream:notice'),
+    onState: on('stream:state'), onNotice: on('stream:notice'), onFps: on('stream:fps'),
   },
   util: { copy: call('util:copy'), open: call('util:open') },
   win: { fullscreen: call('win:fullscreen'), onFullscreen: on('win:fullscreen') },
