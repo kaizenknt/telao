@@ -1,0 +1,23 @@
+{
+  "version": "1.3.0",
+  "full": false,
+  "download": "https://github.com/kaizenknt/telao#baixar",
+  "notes": "Firewall com um clique, convite pelo IP do Hamachi e atualização automática.",
+  "files": [
+    "src/assets/icon.ico",
+    "src/assets/icon.png",
+    "src/assets/tray-live.png",
+    "src/assets/tray-live@2x.png",
+    "src/assets/tray.png",
+    "src/assets/tray@2x.png",
+    "src/engine.js",
+    "src/main.js",
+    "src/preload.js",
+    "src/renderer/app.js",
+    "src/renderer/index.html",
+    "src/renderer/player.js",
+    "src/renderer/style.css",
+    "src/system.js",
+    "src/version.js"
+  ]
+}

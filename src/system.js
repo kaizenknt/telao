@@ -97,38 +97,36 @@ function createUpdater({ onState }) {
   let state = { state: 'idle', current: VERSION };
   const set = (s) => { state = { ...state, ...s }; onState?.(state); };
 
+  // Lê o manifesto update.json direto do repositório (raw.githubusercontent.com — não precisa de login).
+  const RAW = `https://raw.githubusercontent.com/${REPO}/main/`;
   async function check({ apply = true } = {}) {
     try {
-      set({ state: 'checking' });
-      const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-        headers: { 'User-Agent': 'Telao', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000),
-      });
+      set({ state: 'checking', error: null });
+      const r = await fetch(RAW + 'update.json?t=' + Date.now(), { headers: { 'User-Agent': 'Telao' }, signal: AbortSignal.timeout(15000), cache: 'no-store' });
       if (!r.ok) return set({ state: 'idle', error: `GitHub respondeu ${r.status}` });
-      const rel = await r.json();
-      const latest = String(rel.tag_name || '').replace(/^v/, '');
+      const man = await r.json();
+      const latest = String(man.version || '');
       if (!latest || cmpVer(latest, VERSION) <= 0) return set({ state: 'up-to-date', latest });
-      const assets = rel.assets || [];
-      const code = assets.find((a) => /^telao-update-.*\.zip$/i.test(a.name));
-      const full = assets.find((a) => /windows\.zip$/i.test(a.name));
-      // atualização que muda o motor/servidor precisa do pacote completo (marcado no texto da versão)
-      const needsFull = /\[completa\]/i.test(rel.body || '') || !code;
-      if (needsFull) return set({ state: 'needs-full', latest, url: rel.html_url, fullUrl: full?.browser_download_url, notes: rel.body });
-      if (!apply) return set({ state: 'available', latest, notes: rel.body });
+      // versões que mudam o motor/servidor precisam do pacote completo
+      if (man.full) return set({ state: 'needs-full', latest, url: man.download || `https://github.com/${REPO}`, notes: man.notes });
+      if (!apply) return set({ state: 'available', latest, notes: man.notes });
 
       set({ state: 'downloading', latest });
-      const zipRes = await fetch(code.browser_download_url, { signal: AbortSignal.timeout(120000) });
-      if (!zipRes.ok) throw new Error('download ' + zipRes.status);
-      const tmp = path.join(app.getPath('userData'), `update-${latest}.zip`);
-      fs.writeFileSync(tmp, Buffer.from(await zipRes.arrayBuffer()));
       const staging = path.join(app.getPath('userData'), `update-${latest}`);
       fs.rmSync(staging, { recursive: true, force: true });
-      fs.mkdirSync(staging, { recursive: true });
-      const x = await run('tar.exe', ['-xf', tmp, '-C', staging], { timeout: 60000 });
-      if (!fs.existsSync(path.join(staging, 'src', 'main.js'))) throw new Error('pacote inválido ' + x.out.slice(0, 200));
+      for (const f of man.files || []) {
+        if (!/^src\/[\w\-./@]+$/.test(f) || f.includes('..')) throw new Error('arquivo inválido no manifesto: ' + f);
+        const fr = await fetch(RAW + f + '?v=' + latest, { headers: { 'User-Agent': 'Telao' }, signal: AbortSignal.timeout(60000) });
+        if (!fr.ok) throw new Error(`download ${f}: ${fr.status}`);
+        const dest = path.join(staging, ...f.split('/'));
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, Buffer.from(await fr.arrayBuffer()));
+      }
+      const v = fs.existsSync(path.join(staging, 'src', 'version.js')) ? fs.readFileSync(path.join(staging, 'src', 'version.js'), 'utf8') : '';
+      if (!fs.existsSync(path.join(staging, 'src', 'main.js')) || !v.includes(`'${latest}'`)) throw new Error('pacote incompleto');
       fs.rmSync(dir(), { recursive: true, force: true });
       fs.renameSync(staging, dir());
-      fs.rmSync(tmp, { force: true });
-      set({ state: 'ready', latest, notes: rel.body });
+      set({ state: 'ready', latest, notes: man.notes });
     } catch (e) {
       set({ state: 'idle', error: String(e.message || e) });
     }

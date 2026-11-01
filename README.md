@@ -25,5 +25,9 @@ npm install
 npm run dist
 ```
 
-Atualizações pequenas (só código) saem como `telao-update-x.y.z.zip` na release; o app baixa e aplica sozinho.
-Se a release precisar do pacote completo, escreva `[completa]` no texto da release.
+### Atualização automática
+
+O app lê o `update.json` deste repositório (branch `main`) ao abrir e a cada 3 horas.
+Para lançar uma versão só de código: suba o `VERSION` em `src/version.js`, atualize `version` e a lista
+`files` no `update.json` e dê push. O app baixa os arquivos de `src/` e mostra o botão **Reiniciar**.
+Se a versão mudar o motor/servidor (pasta `resources/`), use `"full": true`: o app só avisa e abre o link de download.
