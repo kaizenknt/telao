@@ -245,8 +245,13 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
     const cfg = getCfg();
     const host = serverHost();
     if (!host || !cfg.password) return { ok: false, error: 'Configure a sala primeiro.' };
-    if (!(await ensureGst())) return { ok: false, error: 'Motor de vídeo não encontrado na pasta do app.' };
     await stop(true);
+
+    // antes de tudo: a sala responde? (senão o erro certo é de rede, não do motor)
+    setState({ state: 'iniciando', detail: 'Procurando a sala…' });
+    const reach = await probeRoom();
+    if (!reach.ok) { setState({ state: 'erro', detail: reach.error }); return { ok: false, error: reach.error }; }
+    if (!(await ensureGst())) { setState({ state: 'erro', detail: 'Motor de vídeo não encontrado na pasta do app.' }); return { ok: false, error: state.detail }; }
 
     setState({ state: 'iniciando', detail: 'Preparando a placa de vídeo…' });
     const encoder = await detectEncoder(false);
@@ -335,7 +340,7 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
         return;
       }
       wantLive = false;
-      setState({ state: 'erro', detail: friendlyError(err) });
+      probeRoom().then((r) => setState({ state: 'erro', detail: r.ok ? friendlyError(err) : r.error }));
     });
 
     // confere no servidor quando a transmissão realmente apareceu
@@ -380,8 +385,29 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
     return { ok: true };
   }
 
+  // testa se o servidor da sala responde, separando "sem rede" de "senha errada"
+  async function probeRoom() {
+    const cfg = getCfg();
+    const host = serverHost();
+    try {
+      const r = await fetch(`http://${host}:${PORTS.api}/v3/paths/list?itemsPerPage=1`, {
+        headers: { Authorization: 'Basic ' + Buffer.from(`${ROOM_USER}:${cfg.password}`).toString('base64') },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (r.status === 401) return { ok: false, error: 'Senha da sala incorreta. Peça um convite novo para o host.' };
+      return { ok: true };
+    } catch {
+      return {
+        ok: false,
+        error: cfg.hosting
+          ? 'A sala deste PC não está respondendo. Feche e abra o Telão de novo.'
+          : `Não consigo chegar na sala (${host}). O host está com o Telão aberto? Se vocês usam Hamachi/Radmin, os dois precisam estar conectados na mesma rede; se for pela internet, as portas do host precisam estar abertas.`,
+      };
+    }
+  }
+
   function friendlyError(err) {
-    if (/Could not connect|connection refused|error sending request|tcp connect|dns/i.test(err)) return 'Não consegui chegar no servidor da sala. O host está com o Telão aberto? (Hamachi ligado?)';
+    if (/Could not connect|connection refused|error sending request|tcp connect|dns|timed? ?out|unreachable/i.test(err)) return 'Não consigo chegar na sala. O host está com o Telão aberto e vocês estão na mesma rede (VPN) ou com as portas abertas?';
     if (/401|Unauthorized/i.test(err)) return 'Senha da sala incorreta.';
     if (/window|HWND|capture/i.test(err)) return 'Não deu para capturar essa janela. Se for um jogo em tela cheia exclusiva, mude para "janela sem bordas" ou compartilhe a tela inteira.';
     return 'O motor de vídeo parou. Abra Configurações → "Testar motor" e me mande o relatório.' + (err ? `\n\n${err.slice(0, 300)}` : '');

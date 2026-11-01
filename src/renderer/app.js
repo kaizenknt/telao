@@ -72,6 +72,7 @@ async function startApp() {
   stState = await api.stream.state();
   renderStream();
   checkFw();
+  api.net.state().then(renderNet);
   api.upd.state().then((s) => { updState = s; renderUpd(); });
   poll();
   clearInterval(pollTimer);
@@ -354,9 +355,11 @@ function renderInviteVia(userPicked) {
   hint.textContent = o.kind === 'internet'
     ? 'Esse endereço só funciona se as portas estiverem abertas no seu roteador.'
     : `Seus amigos precisam estar na mesma rede do ${o.kind} que você.`;
+  if (o.kind === 'internet' && o.portsOk) hint.textContent = 'O Telão abriu as portas no seu roteador sozinho. Seus amigos não precisam instalar nada além do Telão.';
+  if (o.kind === 'internet' && o.cgnat) hint.textContent = 'Sua operadora usa CGNAT: ninguém de fora consegue chegar por esse endereço. Use uma VPN (Radmin/Tailscale) ou peça IP público à operadora.';
   show(hint, true);
   // guarda a VPN que o host escolheu, para virar a recomendada da próxima vez
-  if (userPicked && o.kind !== 'internet') api.host.remember(o.kind);
+  if (userPicked) api.host.remember(o.kind);
 }
 $('#invite-via').addEventListener('change', () => renderInviteVia(true));
 $('#btn-invite').addEventListener('click', openInvite);
@@ -434,6 +437,24 @@ $('#btn-diag').addEventListener('click', async () => {
 });
 $('#btn-diag-copy').addEventListener('click', async () => { await api.util.copy($('#diag-out').textContent); toast('Relatório copiado. Cola na conversa comigo!'); });
 $('#btn-log').addEventListener('click', () => api.stream.openLog());
+
+/* ---------- Portas no roteador (UPnP) ---------- */
+function renderNet(st) {
+  const el = $('#host-net');
+  if (!cfg.hosting || !st || st.status === 'idle') return show(el, false);
+  const map = {
+    working: 'Abrindo as portas no roteador…',
+    ok: '✔ Portas abertas no roteador pelo Telão — amigos podem entrar pela internet, sem VPN.',
+    partial: `⚠ Abri quase tudo, mas ${(st.conflicts || []).join(', ')} já está em uso por outro aparelho da casa.`,
+    unavailable: 'Não consegui abrir as portas sozinho (UPnP desligado no roteador). Use uma VPN ou abra manualmente.',
+    error: 'Não consegui abrir as portas sozinho: ' + (st.error || ''),
+  };
+  let t = map[st.status] || '';
+  if (st.cgnat) t = '⚠ Sua operadora usa CGNAT: abrir portas não adianta. Use o Radmin/Tailscale ou peça IP público à operadora.';
+  el.textContent = t;
+  show(el, !!t);
+}
+api.net.onState(renderNet);
 
 /* ---------- Firewall ---------- */
 let fwState = null;

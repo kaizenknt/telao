@@ -15,7 +15,7 @@ extraia e abra o `Telao.exe`. Depois disso o app se atualiza sozinho.
 - Quem transmite usa o motor embutido ([GStreamer](https://gstreamer.freedesktop.org/)): captura D3D11 → H.264 na GPU → WHIP.
 - Quem assiste recebe pelo WebRTC (WHEP) dentro do app.
 
-Portas (só se não usar VPN): 8889/TCP, 9997/TCP, 8189/TCP+UDP.
+Sem VPN: o Telão abre as portas do roteador sozinho via **UPnP** (8889/TCP, 9997/TCP, 8189/TCP+UDP), detecta CGNAT e remove as regras ao fechar. Se o roteador não tiver UPnP, abra essas portas manualmente.
 
 ## Desenvolver
 

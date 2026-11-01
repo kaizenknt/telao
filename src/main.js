@@ -22,6 +22,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const createEngine = require('./engine');
 const sys = require('./system');
+const { createUpnp } = require('./upnp');
 
 const PORTS = { webrtc: 8889, ice: 8189, api: 9997 };
 const ROOM_USER = 'sala';
@@ -74,6 +75,7 @@ function mediamtxBin() {
 
 function yamlStr(s) { return JSON.stringify(String(s)); } // string JSON é YAML válido
 
+let advertiseHosts = []; // IP público anunciado aos amigos (vem do UPnP)
 function buildMtxConfig(password) {
   return `# Gerado pelo Telão — não edite, é recriado a cada início.
 logLevel: info
@@ -105,7 +107,7 @@ webrtcAllowOrigins: ["*"]
 webrtcLocalUDPAddress: :${PORTS.ice}
 webrtcLocalTCPAddress: :${PORTS.ice}
 webrtcIPsFromInterfaces: true
-webrtcAdditionalHosts: []
+webrtcAdditionalHosts: ${JSON.stringify(advertiseHosts)}
 webrtcICEServers2:
   - url: stun:stun.l.google.com:19302
 
@@ -132,7 +134,7 @@ function startHost() {
     for (const line of buf.toString().split(/\r?\n/).filter(Boolean)) {
       mtxLog.push(line); if (mtxLog.length > 300) mtxLog.shift();
       send('host:log', line);
-      if (/\[API\] started/.test(line)) setMtxState('rodando');
+      if (/\[API\] started/.test(line)) { setMtxState('rodando'); openPorts(); }
       if (/address already in use|bind:|Only one usage of each socket address/i.test(line))
         setMtxState('erro', 'Uma porta (8889, 8189 ou 9997) já está em uso. Feche outro Telão/MediaMTX aberto.');
     }
@@ -156,6 +158,33 @@ function stopHost() {
     proc.once('exit', done);
     try { proc.kill(); } catch { done(); }
   }).then(() => { mtx = null; setMtxState('parado'); });
+}
+
+/* ---------------- Portas no roteador (UPnP) ---------------- */
+const upnp = createUpnp({
+  ports: [
+    { port: PORTS.webrtc, protocol: 'TCP' }, { port: PORTS.api, protocol: 'TCP' },
+    { port: PORTS.ice, protocol: 'TCP' }, { port: PORTS.ice, protocol: 'UDP' },
+  ],
+  log: (m) => { mtxLog.push(m); if (mtxLog.length > 300) mtxLog.shift(); send('host:log', m); },
+});
+let netState = { status: 'idle' };
+let upnpBusy = null;
+function openPorts() {
+  if (upnpBusy || !cfg.hosting) return upnpBusy;
+  netState = { status: 'working' }; send('net:state', netState);
+  upnpBusy = upnp.open().then(async (st) => {
+    upnpBusy = null;
+    netState = st; send('net:state', netState);
+    // com IP público de verdade, o servidor passa a anunciá-lo (ajuda o vídeo a chegar direto)
+    const ext = st.externalIp;
+    if (['ok', 'partial'].includes(st.status) && ext && !st.cgnat && !advertiseHosts.includes(ext) && mtx) {
+      advertiseHosts = [ext];
+      await stopHost(); startHost(); // reinicia uma vez, só quando o IP muda
+    }
+    return st;
+  });
+  return upnpBusy;
 }
 
 async function publicIp() {
@@ -234,6 +263,7 @@ function registerIpc() {
     const oldPass = cfg.password;
     cfg = saveCfg({ ...cfg, ...patch, server: patch.server !== undefined ? cleanHost(patch.server) : cfg.server });
     if (wasHosting && (!cfg.hosting || cfg.password !== oldPass)) await stopHost();
+    if (wasHosting && !cfg.hosting) { upnp.close().catch(() => {}); netState = { status: 'idle' }; send('net:state', netState); }
     if (cfg.hosting && !mtx) startHost();
     applyLoginItem();
     updateTray();
@@ -249,8 +279,14 @@ function registerIpc() {
   ipcMain.handle('host:invite', async () => {
     // opções de endereço: redes virtuais primeiro (não precisam abrir porta), depois o IP da internet
     const opts = sys.vpnAddresses().map((v) => ({ label: `${v.kind} · ${v.ip}`, host: v.ip, kind: v.kind, invite: makeInvite(v.ip) }));
-    const ip = await publicIp();
-    if (ip) opts.push({ label: `Internet · ${ip} (precisa abrir portas)`, host: ip, kind: 'internet', invite: makeInvite(ip) });
+    const ip = (netState.externalIp && !netState.cgnat ? netState.externalIp : null) || await publicIp();
+    const portsOk = ['ok', 'partial'].includes(netState.status) && !netState.cgnat;
+    if (ip) {
+      const note = netState.cgnat ? 'sua operadora usa CGNAT, não funciona' : portsOk ? 'portas abertas pelo Telão ✔' : 'precisa abrir portas';
+      const o = { label: `Internet · ${ip} (${note})`, host: ip, kind: 'internet', invite: makeInvite(ip), portsOk, cgnat: !!netState.cgnat };
+      // sem preferência salva e com as portas abertas, a internet direta é a melhor opção
+      if (portsOk && !cfg.preferVpn) opts.unshift(o); else opts.push(o);
+    }
     // se o host já escolheu uma VPN antes, ela vira a primeira (recomendada)
     if (cfg.preferVpn) {
       const i = opts.findIndex((o) => o.kind === cfg.preferVpn);
@@ -260,8 +296,10 @@ function registerIpc() {
   });
   ipcMain.handle('host:inviteFor', (_e, host) => makeInvite(cleanHost(host)));
   ipcMain.handle('invite:remember', (_e, kind) => {
-    if (kind && kind !== 'internet' && cfg.preferVpn !== kind) cfg = saveCfg({ ...cfg, preferVpn: kind });
+    if (kind && cfg.preferVpn !== kind) cfg = saveCfg({ ...cfg, preferVpn: kind });
   });
+  ipcMain.handle('net:state', () => netState);
+  ipcMain.handle('net:retry', () => openPorts());
 
   ipcMain.handle('rooms:list', () => listRooms());
 
@@ -458,6 +496,17 @@ app.whenReady().then(() => {
   setInterval(() => updater.check(), 3 * 60 * 60 * 1000);
 });
 
-app.on('before-quit', () => { quitting = true; clearInterval(trayPollTimer); engine?.stop(true); stopHost(); });
+let cleanedUp = false;
+app.on('before-quit', (e) => {
+  quitting = true;
+  if (cleanedUp) return;
+  e.preventDefault();
+  cleanedUp = true;
+  clearInterval(trayPollTimer);
+  engine?.stop(true);
+  stopHost();
+  // tira as regras do roteador antes de fechar (no máximo 2,5 s)
+  Promise.race([upnp.close().catch(() => {}), new Promise((r) => setTimeout(r, 2500))]).finally(() => app.quit());
+});
 // Com o modo leve ligado, fechar a janela NÃO fecha o app (a sala continua). Para sair: bandeja → Sair.
 app.on('window-all-closed', () => { if (quitting || !cfg?.closeToTray) app.quit(); });

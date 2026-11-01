@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('telao', {
   util: { copy: call('util:copy'), open: call('util:open') },
   win: { fullscreen: call('win:fullscreen'), onFullscreen: on('win:fullscreen') },
   ui: { onWatch: on('ui:watch') },
+  net: { state: call('net:state'), retry: call('net:retry'), onState: on('net:state') },
   fw: { status: call('fw:status'), fix: call('fw:fix'), onState: on('fw:state') },
   upd: { state: call('upd:state'), check: call('upd:check'), relaunch: call('upd:relaunch'), onState: on('upd:state') },
 });
