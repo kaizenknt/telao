@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('telao', {
   serverHost: call('server:host'),
   host: {
     start: call('host:start'), stop: call('host:stop'), status: call('host:status'),
-    invite: call('host:invite'), inviteFor: call('host:inviteFor'),
+    invite: call('host:invite'), inviteFor: call('host:inviteFor'), remember: call('invite:remember'),
     onState: on('host:state'), onLog: on('host:log'),
   },
   rooms: { list: call('rooms:list') },

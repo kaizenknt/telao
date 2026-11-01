@@ -42,6 +42,7 @@ const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
 const DEFAULTS = {
   name: '', server: '', password: '', hosting: false, encoder: null, encoderGst: null, lastStream: null,
   closeToTray: true, startWithWindows: false, notifyLive: true, trayHintShown: false,
+  preferVpn: null, // VPN que o host escolheu por último para os convites (ex.: "Hamachi")
 };
 function loadCfg() {
   try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; }
@@ -250,9 +251,17 @@ function registerIpc() {
     const opts = sys.vpnAddresses().map((v) => ({ label: `${v.kind} · ${v.ip}`, host: v.ip, kind: v.kind, invite: makeInvite(v.ip) }));
     const ip = await publicIp();
     if (ip) opts.push({ label: `Internet · ${ip} (precisa abrir portas)`, host: ip, kind: 'internet', invite: makeInvite(ip) });
+    // se o host já escolheu uma VPN antes, ela vira a primeira (recomendada)
+    if (cfg.preferVpn) {
+      const i = opts.findIndex((o) => o.kind === cfg.preferVpn);
+      if (i > 0) opts.unshift(opts.splice(i, 1)[0]);
+    }
     return { options: opts, ports: PORTS };
   });
   ipcMain.handle('host:inviteFor', (_e, host) => makeInvite(cleanHost(host)));
+  ipcMain.handle('invite:remember', (_e, kind) => {
+    if (kind && kind !== 'internet' && cfg.preferVpn !== kind) cfg = saveCfg({ ...cfg, preferVpn: kind });
+  });
 
   ipcMain.handle('rooms:list', () => listRooms());
 

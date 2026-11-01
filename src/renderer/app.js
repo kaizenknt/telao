@@ -346,7 +346,7 @@ async function openInvite() {
   show($('#invite-via-wrap'), inviteOpts.length > 1);
   renderInviteVia();
 }
-function renderInviteVia() {
+function renderInviteVia(userPicked) {
   const o = inviteOpts[+$('#invite-via').value || 0];
   if (!o) return;
   $('#invite-code').textContent = o.invite;
@@ -355,8 +355,10 @@ function renderInviteVia() {
     ? 'Esse endereço só funciona se as portas estiverem abertas no seu roteador.'
     : `Seus amigos precisam estar na mesma rede do ${o.kind} que você.`;
   show(hint, true);
+  // guarda a VPN que o host escolheu, para virar a recomendada da próxima vez
+  if (userPicked && o.kind !== 'internet') api.host.remember(o.kind);
 }
-$('#invite-via').addEventListener('change', renderInviteVia);
+$('#invite-via').addEventListener('change', () => renderInviteVia(true));
 $('#btn-invite').addEventListener('click', openInvite);
 $('#btn-copy-invite').addEventListener('click', async () => {
   const t = $('#invite-code').textContent;
