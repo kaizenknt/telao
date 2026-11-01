@@ -207,3 +207,4 @@ body.full .banners { display: none; }
 .st-fps b { color: var(--text); font-weight: 600; }
 .st-fps .low { color: #ffc966; }
 .st-tip { display: grid; gap: 8px; background: #2b2210; border: 1px solid #ffb02e55; border-radius: 10px; padding: 10px; margin: 0 0 10px; font-size: 12.5px; color: #ffe9c2; }
+.st-fps .auto { color: #8fd3ff; font-weight: 600; }

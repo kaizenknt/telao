@@ -86,6 +86,7 @@ function renderMe() {
 }
 
 /* ---------- lista ao vivo ---------- */
+let goneCount = 0;
 async function poll() {
   const r = await api.rooms.list();
   const conn = $('#conn');
@@ -99,6 +100,11 @@ async function poll() {
     conn.className = 'conn ok';
     $('#conn-text').textContent = cfg.hosting ? 'Sala aberta' : `Conectado a ${cfg.server}`;
     streams = r.items.sort((a, b) => a.name.localeCompare(b.name));
+    // a sala mantém a conexão de quem assiste viva nas trocas de qualidade; então quem decide que a
+    // transmissão acabou é a lista: fora do ar por ~8 s seguidos = fecha o player
+    if (selected && !streams.some((x) => x.name === selected)) {
+      if (++goneCount >= 3) { const n = selected; closePlayer(); toast(`${n} saiu do ar.`); }
+    } else goneCount = 0;
   }
   renderStreams();
 }
@@ -165,6 +171,7 @@ const player = new WhepPlayer(video, {
 });
 
 async function watch(name) {
+  goneCount = 0;
   selected = name;
   show($('#stage-empty'), false);
   show($('#player'));
@@ -252,7 +259,9 @@ api.stream.onFps((f) => {
   const el = $('#st-fps');
   if (!f) { show(el, false); return; }
   const low = (n) => (n < f.target - 6 ? ' class="low"' : '');
-  el.innerHTML = `capturando <b${low(f.capFps)}>${f.capFps}</b> · enviando <b${low(f.encFps)}>${f.encFps}</b> de ${f.target} FPS`;
+  el.innerHTML = `capturando <b${low(f.capFps)}>${f.capFps}</b> · enviando <b${low(f.encFps)}>${f.encFps}</b> de ${f.target} FPS`
+    + (f.autoActive ? ' · <span class="auto">ajuste automático</span>' : '');
+  if (f.auto) show($('#st-tip'), false);
   show(el, stState.state === 'ao-vivo');
   if (f.hint) showFpsTip(f.hint);
 });
@@ -295,7 +304,7 @@ async function openPicker() {
     qualities = await api.stream.qualities();
     const qs = $('#pick-quality');
     qs.textContent = '';
-    for (const [k, v] of Object.entries(qualities)) qs.add(new Option(`${v.label} · ${v.kbps / 1000} Mbps`, k));
+    for (const [k, v] of Object.entries(qualities)) if (!v.hidden) qs.add(new Option(`${v.label} · ${v.kbps / 1000} Mbps`, k));
   }
   const last = cfg.lastStream || {};
   $('#pick-quality').value = last.quality || '1080p60';
@@ -434,6 +443,7 @@ $('#btn-settings').addEventListener('click', async () => {
   $('#engine-info').textContent = cfg.encoder?.label ? `Codificador: ${cfg.encoder.label}` : 'Codificador: detectado na primeira transmissão (ou em "Testar motor").';
   form.closeToTray.checked = !!cfg.closeToTray;
   form.notifyLive.checked = !!cfg.notifyLive;
+  form.autoFps.checked = cfg.autoFps !== false;
   form.startWithWindows.checked = !!cfg.startWithWindows;
   show($('#settings-error'), false);
   syncModeFields();
@@ -459,7 +469,7 @@ form.addEventListener('submit', async (e) => {
   cfg = await api.cfg.set({
     name: form.name.value.trim(), hosting: host, server: form.server.value.trim(),
     password: form.password.value,
-    closeToTray: form.closeToTray.checked, notifyLive: form.notifyLive.checked, startWithWindows: form.startWithWindows.checked,
+    closeToTray: form.closeToTray.checked, notifyLive: form.notifyLive.checked, autoFps: form.autoFps.checked, startWithWindows: form.startWithWindows.checked,
   });
   $('#dlg-settings').close();
   renderMe(); renderHost();

@@ -1,8 +1,8 @@
 {
-  "version": "1.5.1",
+  "version": "1.6.0",
   "full": false,
   "download": "https://github.com/kaizenknt/telao#baixar",
-  "notes": "Imagem mais lisa (buffer de suavização), FPS real da captura e sugestão de 30 FPS só quando o problema é constante.",
+  "notes": "Ajuste automático de FPS (igual o Discord): se o jogo pesar, desce sozinho para 30 FPS ou 720p sem derrubar quem assiste, e volta quando der. Pode desligar nas Configurações.",
   "files": [
     "src/assets/icon.ico",
     "src/assets/icon.png",

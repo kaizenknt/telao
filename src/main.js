@@ -43,7 +43,8 @@ const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
 const DEFAULTS = {
   name: '', server: '', password: '', hosting: false, encoder: null, encoderGst: null, lastStream: null,
   closeToTray: true, startWithWindows: false, notifyLive: true, trayHintShown: false,
-  preferVpn: null, // VPN que o host escolheu por último para os convites (ex.: "Hamachi")
+  preferVpn: null,
+  autoFps: true, // troca sozinho para menos FPS/resolução quando o jogo ou o codificador não dá conta (igual o Discord) // VPN que o host escolheu por último para os convites (ex.: "Hamachi")
 };
 function loadCfg() {
   try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; }

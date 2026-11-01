@@ -10,10 +10,18 @@ const fs = require('fs');
 const { spawn, execFile } = require('child_process');
 
 const QUALITY = {
+  '720p30':  { w: 1280, h: 720,  fps: 30, kbps: 3500,  label: '720p · 30 FPS', hidden: true },
   '720p60':  { w: 1280, h: 720,  fps: 60, kbps: 5000,  label: '720p · 60 FPS' },
   '1080p30': { w: 1920, h: 1080, fps: 30, kbps: 6000,  label: '1080p · 30 FPS' },
   '1080p60': { w: 1920, h: 1080, fps: 60, kbps: 8000,  label: '1080p · 60 FPS' },
+  '1440p30': { w: 2560, h: 1440, fps: 30, kbps: 10000, label: '1440p · 30 FPS', hidden: true },
   '1440p60': { w: 2560, h: 1440, fps: 60, kbps: 14000, label: '1440p · 60 FPS' },
+};
+// Para onde descer quando não dá conta: captura lenta (jogo tomando a placa) -> mesmo tamanho a 30 FPS;
+// codificador lento -> um tamanho abaixo, mesmo FPS.
+const STEP_DOWN = {
+  capture: { '1440p60': '1440p30', '1080p60': '1080p30', '720p60': '720p30', '1440p30': '1080p30', '1080p30': '720p30' },
+  encoder: { '1440p60': '1080p60', '1080p60': '720p60', '720p60': '720p30', '1440p30': '1080p30', '1080p30': '720p30' },
 };
 
 // Codificadores em ordem de preferência. "gpu: true" = recebe os quadros direto da placa de vídeo.
@@ -81,6 +89,12 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
   let state = { state: 'parado' };
   let lastErrors = [];
   let liveCheck = null;
+  // ajuste automático (como o Discord): qualidade que a pessoa escolheu x a que está rodando agora
+  const auto = { userQuality: null, upTimer: null, backoffMs: 5 * 60 * 1000, probing: false, probeOkTimer: null };
+  function resetAuto() {
+    clearTimeout(auto.upTimer); clearTimeout(auto.probeOkTimer);
+    Object.assign(auto, { userQuality: null, upTimer: null, backoffMs: 5 * 60 * 1000, probing: false, probeOkTimer: null });
+  }
 
   function setState(s) {
     state = { ...s, source: current?.sourceName, quality: current && QUALITY[current.quality]?.label, encoder: current?.encoderLabel };
@@ -213,12 +227,18 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
       hist.push(sample); if (hist.length > 8) hist.shift();
       const avg = (k) => Math.round(hist.reduce((a, x) => a + x[k], 0) / hist.length);
       // sugestão só quando o problema é constante: em pelo menos 7 dos últimos 8 segundos
-      if (!suggested && target >= 60 && hist.length === 8) {
-        const capLow = hist.filter((x) => x.cap >= 15 && x.cap < 52).length;
-        const encLow = hist.filter((x) => x.cap >= 55 && x.enc < x.cap - 8).length;
+      if (!suggested && hist.length === 8) {
+        const m = target >= 60 ? 8 : 5; // folga: 60 FPS aceita até 52; 30 FPS aceita até 25
+        const capLow = hist.filter((x) => x.cap >= target / 4 && x.cap < target - m).length;
+        const encLow = hist.filter((x) => x.cap >= target - m / 2 && x.enc < x.cap - m).length;
         if (capLow >= 7) { suggested = true; info.hint = { kind: 'capture', avg: avg('cap') }; }
         else if (encLow >= 7) { suggested = true; info.hint = { kind: 'encoder', avg: avg('enc') }; }
       }
+      if (info.hint && getCfg().autoFps !== false) {
+        const done = autoStepDown(info.hint);
+        if (done) { info.auto = done; delete info.hint; }
+      }
+      info.autoActive = !!(auto.userQuality && current && current.quality !== auto.userQuality);
       send('stream:fps', info);
     }, 1000);
     return {
@@ -277,7 +297,14 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
       '! queue ! whip.sink_0',
     ].join(' ');
 
-    let audioPart = '';
+    let audioPart = [
+      'audiotestsrc wave=silence is-live=true',
+      '! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2',
+      '! opusenc bitrate=16000 frame-size=20',
+      '! rtpopuspay pt=97',
+      '! application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000',
+      '! queue ! whip.sink_1',
+    ].join(' ');
     if (audio !== 'none') {
       const mode = audioPid
         ? `loopback-mode=include-process-tree loopback-target-pid=${audioPid}`
@@ -339,15 +366,18 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
       audio, audioPid, quality: opts.quality || '1080p60', encoder, encoderLabel: encoder.label,
     };
     setCfg({ lastStream: { kind: source.kind, sourceName: source.name, audio: opts.audio || 'auto', quality: current.quality } });
+    resetAuto();
+    auto.userQuality = current.quality;
     wantLive = true;
     retries = 0;
     launch();
     return { ok: true };
   }
 
-  function launch() {
+  async function launch(opts = {}) {
     const cfg = getCfg();
     const name = slug(cfg.name);
+    await ensurePath(name);
     const pipeline = buildPipeline({
       source: current, audio: current.audio, audioPid: current.audioPid, quality: current.quality, encoder: current.encoder,
       endpoint: `http://${serverHost()}:${PORTS.webrtc}/${name}/whip`,
@@ -355,7 +385,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     });
     log('---- iniciando ----', 'pipeline: ' + pipeline.replace(/auth-token="[^"]*"/, 'auth-token="***"'));
     lastErrors = [];
-    setState({ state: 'iniciando', detail: 'Conectando à sala…' });
+    if (!opts.seamless) setState({ state: 'iniciando', detail: 'Conectando à sala…' });
 
     const p = spawn(bin('gst-launch-1.0'), ['-e', '-v', ...split(pipeline)], { env: env(), windowsHide: true });
     proc = p;
@@ -426,6 +456,71 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     }, 1000);
   }
 
+  /* ---------- troca de qualidade sem derrubar quem assiste ----------
+   * Sobe uma transmissão nova com a qualidade nova ENQUANTO a antiga ainda está no ar. O servidor troca uma
+   * pela outra ("override") e, como o caminho é "sempre disponível", quem assiste não desconecta: só a
+   * qualidade muda. Testado: zero quadros perdidos no leitor durante a troca.
+   */
+  function switchQuality(quality) {
+    if (!proc || !wantLive || current.quality === quality) return false;
+    const old = proc;
+    current.quality = quality;
+    log(`troca de qualidade -> ${quality}`);
+    launch({ seamless: true }); // "proc" passa a ser o novo; a saída do antigo é ignorada
+    setTimeout(() => { try { old.kill(); } catch {} }, 8000); // o servidor já derrubou; garante que fecha
+    setTimeout(() => { if (wantLive) setState({ state: state.state === 'iniciando' ? 'iniciando' : 'ao-vivo' }); }, 1500);
+    return true;
+  }
+
+  function autoStepDown(hint) {
+    const next = STEP_DOWN[hint.kind]?.[current.quality];
+    if (!next || !switchQuality(next)) return null;
+    // se caiu durante uma tentativa de voltar, espera o dobro antes de tentar de novo (máx. 40 min)
+    if (auto.probing) auto.backoffMs = Math.min(auto.backoffMs * 2, 40 * 60 * 1000);
+    auto.probing = false;
+    clearTimeout(auto.probeOkTimer);
+    scheduleStepUp();
+    const from = QUALITY[auto.userQuality]?.label, to = QUALITY[next].label;
+    send('stream:notice', hint.kind === 'capture'
+      ? `O jogo está pesando: baixei para ${to} para ficar liso. Volto para ${from} sozinho quando der.`
+      : `O codificador não está dando conta: baixei para ${to}. Volto para ${from} sozinho quando der.`);
+    return { from: auto.userQuality, to: next, kind: hint.kind };
+  }
+
+  function scheduleStepUp() {
+    clearTimeout(auto.upTimer);
+    auto.upTimer = setTimeout(() => {
+      if (!wantLive || !auto.userQuality || current.quality === auto.userQuality) return;
+      auto.probing = true;
+      log(`tentando voltar para ${auto.userQuality}`);
+      if (!switchQuality(auto.userQuality)) return;
+      // se ficar 40 s sem cair de novo, deu certo: volta a esperar só 5 min na próxima vez
+      clearTimeout(auto.probeOkTimer);
+      auto.probeOkTimer = setTimeout(() => {
+        if (auto.probing && current.quality === auto.userQuality) {
+          auto.probing = false; auto.backoffMs = 5 * 60 * 1000;
+          send('stream:notice', `Voltei para ${QUALITY[auto.userQuality].label}.`);
+        }
+      }, 40000);
+    }, auto.backoffMs);
+  }
+
+  // cria o caminho desta pessoa como "sempre disponível" (quem assiste continua conectado nas trocas)
+  async function ensurePath(name) {
+    try {
+      const r = await fetch(`http://${serverHost()}:${PORTS.api}/v3/config/paths/add/${encodeURIComponent(name)}`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Basic ' + Buffer.from(`${ROOM_USER}:${getCfg().password}`).toString('base64'),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ alwaysAvailable: true, alwaysAvailableTracks: [{ codec: 'H264' }, { codec: 'Opus' }] }),
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!r.ok && r.status !== 400) log(`caminho sempre disponível: servidor respondeu ${r.status}`);
+    } catch (e) { log('caminho sempre disponível: ' + e.message); }
+  }
+
   // pede para o servidor derrubar a sessão na hora (senão ela some só depois de alguns segundos)
   async function kickOwnSession() {
     try {
@@ -439,6 +534,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
 
   async function stop(silent = false) {
     wantLive = false;
+    resetAuto();
     clearInterval(liveCheck);
     const p = proc;
     proc = null;
