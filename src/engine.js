@@ -193,6 +193,23 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
     });
   }
 
+  /* ---------- prioridade da captura ----------
+   * Com o jogo usando 100% da placa de vídeo, o Windows deixa a captura por último na fila e os quadros
+   * atrasam (é o "FPS caindo na transmissão"). O OBS resolve subindo a prioridade na GPU; aqui fazemos igual:
+   * processador em "Alta" e GPU em HIGH (D3DKMTSetProcessSchedulingPriorityClass), só para o processo de captura.
+   */
+  function boostPriority(pid) {
+    if (!isWin || !pid) return;
+    const ps = `$ErrorActionPreference='SilentlyContinue';
+Add-Type -Namespace T -Name G -MemberDefinition '[DllImport("gdi32.dll")] public static extern int D3DKMTSetProcessSchedulingPriorityClass(System.IntPtr h, int p);';
+$p = Get-Process -Id ${Number(pid)}; $cpu = 'falhou'; try { $p.PriorityClass = 'High'; $cpu = 'alta' } catch {}
+$gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
+"cpu=$cpu gpu=" + ($(if ($gpu -eq 0) {'alta'} else {'codigo ' + $gpu}))`;
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 15000 }, (err, out) => {
+      log(`prioridade da captura: ${String(out || '').trim() || (err ? err.message : '?')}`);
+    });
+  }
+
   /* ---------- montar o pipeline ---------- */
   function buildPipeline({ source, audio, audioPid, quality, encoder, endpoint, token }) {
     const Q = QUALITY[quality] || QUALITY['1080p60'];
@@ -211,7 +228,7 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
 
     const video = [
       src, `! video/x-raw(memory:D3D11Memory),framerate=${Q.fps}/1`,
-      '! queue max-size-buffers=2 leaky=downstream',
+      '! queue max-size-buffers=3 leaky=downstream',
       `! ${toEncoder}`,
       `! ${encStr}`,
       '! h264parse config-interval=-1',
@@ -302,6 +319,7 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
 
     const p = spawn(bin('gst-launch-1.0'), ['-e', ...split(pipeline)], { env: env(), windowsHide: true });
     proc = p;
+    boostPriority(p.pid);
     const onData = (d) => {
       for (const line of String(d).split(/\r?\n/).filter(Boolean)) {
         if (/ERROR|erroneous|WARN/.test(line)) { lastErrors.push(line); if (lastErrors.length > 40) lastErrors.shift(); log(line); }

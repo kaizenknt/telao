@@ -96,6 +96,8 @@ class WhepPlayer {
   _startStats(gen) {
     clearInterval(this.statsTimer);
     this.lastBytes = 0; this.lastTs = 0;
+    this.prev = null;
+    this.history = []; // últimos ~10 s, para dizer de onde vem a queda de FPS
     this.statsTimer = setInterval(async () => {
       if (gen !== this.gen || !this.pc) return clearInterval(this.statsTimer);
       const r = await this.pc.getStats().catch(() => null);
@@ -105,16 +107,47 @@ class WhepPlayer {
         if (s.type === 'inbound-rtp' && s.kind === 'video') {
           out.fps = s.framesPerSecond || 0;
           out.w = s.frameWidth; out.h = s.frameHeight;
-          out.lost = s.packetsLost || 0;
           out.codec = s.codecId && r.get(s.codecId)?.mimeType?.split('/')[1];
           if (this.lastTs) out.mbps = ((s.bytesReceived - this.lastBytes) * 8) / ((s.timestamp - this.lastTs) * 1000);
           this.lastBytes = s.bytesReceived; this.lastTs = s.timestamp;
+          // diferenças de 1 s: pacotes perdidos, quadros que chegaram, descartados e travadas
+          const cur = {
+            lost: s.packetsLost || 0, recv: s.packetsReceived || 0, frames: s.framesReceived || 0,
+            dropped: s.framesDropped || 0, freezes: s.freezeCount || 0, freezeDur: s.totalFreezesDuration || 0,
+          };
+          if (this.prev) {
+            const dl = Math.max(0, cur.lost - this.prev.lost), dr = Math.max(0, cur.recv - this.prev.recv);
+            out.lossPct = dl + dr ? (dl / (dl + dr)) * 100 : 0;
+            out.arrivingFps = cur.frames - this.prev.frames;          // quadros que o streamer mandou e chegaram
+            out.droppedFps = Math.max(0, cur.dropped - this.prev.dropped);
+            out.freezeMs = Math.max(0, (cur.freezeDur - this.prev.freezeDur) * 1000);
+          }
+          this.prev = cur;
         }
         if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') out.rtt = s.currentRoundTripTime;
       });
+      if (out.arrivingFps != null) {
+        this.history.push(out); if (this.history.length > 10) this.history.shift();
+        out.verdict = verdict(this.history);
+      }
       this.onStats(out);
     }, 1000);
   }
+}
+
+// Diz de onde vem a queda de FPS olhando os últimos segundos:
+// - pacotes perdidos / travadas → a internet (upload de quem hospeda/transmite, ou a de quem assiste)
+// - nada perdido, mas chegam poucos quadros → o PC de quem transmite não está gerando 60 (jogo pesando)
+// - chegam 60, mas o vídeo trava aqui → o PC de quem assiste não está dando conta
+function verdict(h) {
+  if (h.length < 4) return null;
+  const avg = (k) => h.reduce((a, x) => a + (x[k] || 0), 0) / h.length;
+  const loss = avg('lossPct'), arriving = avg('arrivingFps'), dropped = avg('droppedFps'), freeze = avg('freezeMs');
+  if (loss > 1) return { kind: 'rede', text: `Rede: ${loss.toFixed(1)}% dos pacotes se perdendo no caminho` };
+  if (freeze > 150) return { kind: 'rede', text: `Rede instável: o vídeo está travando ~${Math.round(freeze)} ms por segundo (a internet oscilando)` };
+  if (arriving < 50 && loss <= 1) return { kind: 'origem', text: `O PC de quem transmite está mandando só ${Math.round(arriving)} quadros/s (jogo pesando no PC dele)` };
+  if (dropped > 3) return { kind: 'local', text: `Seu PC está descartando ${Math.round(dropped)} quadros/s ao mostrar o vídeo` };
+  return { kind: 'ok', text: 'Tudo certo: chegando liso' };
 }
 
 function waitIce(pc, maxMs) {

@@ -103,8 +103,13 @@ async function poll() {
   renderStreams();
 }
 
+let lastStreamsKey = '';
 function renderStreams() {
   const ul = $('#streams');
+  // só redesenha a lista quando algo mudou (redesenhar no meio de um clique fazia o clique se perder)
+  const key = JSON.stringify([selected, streams.map((s) => [s.name, s.viewers, ago(s.since)])]);
+  if (key === lastStreamsKey && ul.childElementCount === streams.length) return;
+  lastStreamsKey = key;
   ul.textContent = '';
   $('#live-count').textContent = streams.length;
   show($('#streams-empty'), streams.length === 0);
@@ -146,8 +151,16 @@ const player = new WhepPlayer(video, {
     if (s.fps) parts.push(`${Math.round(s.fps)} fps`);
     if (s.mbps != null) parts.push(`${s.mbps.toFixed(1)} Mbps`);
     if (s.rtt != null) parts.push(`${Math.round(s.rtt * 1000)} ms`);
+    if (s.lossPct != null) parts.push(`${s.lossPct.toFixed(1)}% perda`);
     if (s.codec) parts.push(s.codec);
-    $('#stats').textContent = parts.join(' · ');
+    const el = $('#stats');
+    el.textContent = parts.join(' · ');
+    if (s.verdict) {
+      const v = document.createElement('div');
+      v.className = 'verdict ' + s.verdict.kind;
+      v.textContent = s.verdict.text;
+      el.appendChild(v);
+    }
   },
 });
 

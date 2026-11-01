@@ -194,3 +194,10 @@ pre.diag { max-height: 220px; overflow: auto; background: #000; border-radius: 8
 .banner.warn { background: #3a1712; border: 1px solid #ff4d3d66; color: #ffd9d4; }
 .banner.ok { background: #2b2210; border: 1px solid #ffb02e66; color: #ffe9c2; }
 body.full .banners { display: none; }
+
+/* veredito das estatísticas: de onde vem a queda de FPS */
+.stats .verdict { margin-top: 4px; font-weight: 600; }
+.stats .verdict.ok { color: #7be0a5; }
+.stats .verdict.rede { color: #ff9a8d; }
+.stats .verdict.origem { color: #ffc966; }
+.stats .verdict.local { color: #9ec5ff; }

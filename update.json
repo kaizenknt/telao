@@ -1,8 +1,8 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "full": false,
   "download": "https://github.com/kaizenknt/telao#baixar",
-  "notes": "O Telão abre as portas do roteador sozinho (UPnP), detecta CGNAT e mostra o erro certo quando não alcança a sala.",
+  "notes": "Captura com prioridade alta na placa de vídeo (menos queda de FPS em jogo pesado) e estatísticas que dizem de onde vem a queda.",
   "files": [
     "src/assets/icon.ico",
     "src/assets/icon.png",
