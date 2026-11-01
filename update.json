@@ -1,8 +1,8 @@
 {
-  "version": "1.5.0",
+  "version": "1.5.1",
   "full": false,
   "download": "https://github.com/kaizenknt/telao#baixar",
-  "notes": "Imagem mais lisa: buffer de suavização no player, FPS real da captura com sugestão de 30 FPS quando o jogo pesa, e recuperação mais rápida de engasgos.",
+  "notes": "Imagem mais lisa (buffer de suavização), FPS real da captura e sugestão de 30 FPS só quando o problema é constante.",
   "files": [
     "src/assets/icon.ico",
     "src/assets/icon.png",

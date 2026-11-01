@@ -201,20 +201,23 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
     let cap = 0, enc = 0;
     const hist = [];
     let suggested = false;
+    let warmup = 5; // ignora os primeiros segundos (o codificador ainda está aquecendo)
     const target = (QUALITY[current.quality] || QUALITY['1080p60']).fps;
     const timer = setInterval(() => {
       if (p !== proc) return clearInterval(timer);
       const sample = { cap, enc };
       cap = 0; enc = 0;
       if (!sample.cap && !sample.enc) return; // ainda sem quadros (conectando) ou -v sem saída
+      const info = { capFps: sample.cap, encFps: sample.enc, target };
+      if (warmup > 0) { warmup--; send('stream:fps', info); return; }
       hist.push(sample); if (hist.length > 8) hist.shift();
       const avg = (k) => Math.round(hist.reduce((a, x) => a + x[k], 0) / hist.length);
-      const info = { capFps: sample.cap, encFps: sample.enc, target };
-      // sugestão: em 60 FPS, a captura ficando entre 15 e 52 por 8 s seguidos = jogo pesando demais
+      // sugestão só quando o problema é constante: em pelo menos 7 dos últimos 8 segundos
       if (!suggested && target >= 60 && hist.length === 8) {
-        const c = avg('cap'), e = avg('enc');
-        if (c >= 15 && c < 52) { suggested = true; info.hint = { kind: 'capture', avg: c }; }
-        else if (c >= 55 && e < c - 8) { suggested = true; info.hint = { kind: 'encoder', avg: e }; }
+        const capLow = hist.filter((x) => x.cap >= 15 && x.cap < 52).length;
+        const encLow = hist.filter((x) => x.cap >= 55 && x.enc < x.cap - 8).length;
+        if (capLow >= 7) { suggested = true; info.hint = { kind: 'capture', avg: avg('cap') }; }
+        else if (encLow >= 7) { suggested = true; info.hint = { kind: 'encoder', avg: avg('enc') }; }
       }
       send('stream:fps', info);
     }, 1000);
