@@ -1,0 +1,42 @@
+{
+  "name": "telao",
+  "productName": "Telão",
+  "version": "1.2.0",
+  "description": "Compartilhamento de tela entre amigos, com captura e compressão pela placa de vídeo",
+  "main": "src/main.js",
+  "author": "Kaike",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win zip"
+  },
+  "build": {
+    "appId": "br.kaike.telao",
+    "productName": "Telao",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin"
+      },
+      {
+        "from": "resources/gst",
+        "to": "gst"
+      }
+    ],
+    "win": {
+      "target": [
+        "zip"
+      ],
+      "signAndEditExecutable": false
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
+    "resedit": "^2.0.3"
+  }
+}

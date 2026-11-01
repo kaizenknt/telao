@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src 'self' http: https:; media-src 'self' blob: mediastream:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>Telão</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ============ Primeira vez ============ -->
+  <section id="onboarding" class="onboarding hidden">
+    <div class="ob-card">
+      <div class="brand big"><span class="brand-mark"></span>TELÃO</div>
+      <p class="ob-lead">Tela compartilhada entre amigos, sem travar.</p>
+
+      <label class="field">
+        <span>Seu nome (é o nome da sua transmissão)</span>
+        <input id="ob-name" maxlength="32" placeholder="ex.: Kaike" autocomplete="off" />
+      </label>
+
+      <div class="ob-choices">
+        <button class="choice" data-mode="host">
+          <strong>Criar a sala neste PC</strong>
+          <small>Seu PC vira o servidor. Você manda um convite para a galera.</small>
+        </button>
+        <button class="choice" data-mode="guest">
+          <strong>Entrar com convite</strong>
+          <small>Cole o código <code>TELAO-…</code> que seu amigo te mandou.</small>
+        </button>
+      </div>
+
+      <div id="ob-guest" class="hidden">
+        <label class="field">
+          <span>Código de convite</span>
+          <input id="ob-invite" placeholder="TELAO-…" autocomplete="off" spellcheck="false" />
+        </label>
+      </div>
+
+      <p id="ob-error" class="error hidden"></p>
+      <button id="ob-go" class="btn primary wide" disabled>Entrar</button>
+    </div>
+  </section>
+
+  <!-- ============ App ============ -->
+  <div id="app" class="app hidden">
+    <div class="banners" id="banners">
+      <div class="banner warn hidden" id="bn-fw">
+        <span><b>O Firewall do Windows está bloqueando o Telão.</b> Seus amigos não vão conseguir conectar.</span>
+        <button class="btn small primary" id="btn-fw">Liberar agora</button>
+      </div>
+      <div class="banner ok hidden" id="bn-upd">
+        <span id="bn-upd-text"></span>
+        <button class="btn small primary" id="btn-upd"></button>
+      </div>
+    </div>
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark"></span>TELÃO</div>
+      <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">Conectando…</span></div>
+      <div class="spacer"></div>
+      <span class="me" id="me-name"></span>
+      <button class="icon-btn" id="btn-settings" title="Configurações" aria-label="Configurações">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Zm7.4-2.5a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1L11 21h4l.4-2.6c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.2-1.6Z"/></svg>
+      </button>
+    </header>
+
+    <aside class="side">
+      <div class="side-head">
+        <h2>Ao vivo</h2>
+        <span class="count" id="live-count">0</span>
+      </div>
+      <ul class="streams" id="streams"></ul>
+      <p class="side-empty" id="streams-empty">Ninguém transmitindo agora.</p>
+
+      <div class="card" id="card-transmit">
+        <div class="card-row">
+          <h3>Sua transmissão</h3>
+          <span class="pill" id="st-pill">Parado</span>
+        </div>
+        <p class="st-source hidden" id="st-source"></p>
+        <button class="btn primary wide" id="btn-transmit">Transmitir minha tela</button>
+        <button class="btn small wide hidden" id="btn-switch">Trocar o que estou mostrando</button>
+        <p class="hint" id="st-hint">Captura e compressão pela placa de vídeo — não trava em jogo.</p>
+      </div>
+
+      <div class="card" id="card-host">
+        <div class="card-row">
+          <h3 id="host-title">Sala neste PC</h3>
+          <span class="pill" id="host-pill">—</span>
+        </div>
+        <button class="btn wide" id="btn-invite">Convidar amigos</button>
+      </div>
+    </aside>
+
+    <main class="stage" id="stage">
+      <div class="stage-empty" id="stage-empty">
+        <div class="marquee"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        <h1 id="stage-empty-title">Escolha alguém ao vivo</h1>
+        <p id="stage-empty-sub">Quando um amigo começar a transmitir, ele aparece na lista à esquerda.</p>
+      </div>
+
+      <div class="player hidden" id="player">
+        <video id="video" autoplay playsinline></video>
+        <div class="loading hidden" id="loading"><div class="spin"></div><span id="loading-text">Conectando…</span></div>
+        <div class="ov ov-top">
+          <span class="live-badge">AO VIVO</span>
+          <span class="who" id="who"></span>
+          <span class="stats hidden" id="stats"></span>
+        </div>
+        <div class="ov ov-bottom">
+          <button class="icon-btn" id="btn-mute" aria-label="Som">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path id="ico-vol" fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4Zm12.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4Z"/></svg>
+          </button>
+          <input type="range" id="vol" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
+          <div class="spacer"></div>
+          <button class="icon-btn" id="btn-stats" title="Estatísticas" aria-label="Estatísticas">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 20V10h3v10H4Zm6.5 0V4h3v16h-3ZM17 20v-7h3v7h-3Z"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-full" title="Tela cheia (F)" aria-label="Tela cheia">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 4h6v2H6v4H4V4Zm10 0h6v6h-2V6h-4V4ZM4 14h2v4h4v2H4v-6Zm14 0h2v6h-6v-2h4v-4Z"/></svg>
+          </button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ============ Convite ============ -->
+  <dialog id="dlg-invite" class="dlg">
+    <h2>Convidar amigos</h2>
+    <p class="muted">Mande este código pros seus amigos. Eles colam no Telão deles e pronto.</p>
+    <label class="field hidden" id="invite-via-wrap"><span>Endereço da sala</span><select id="invite-via"></select></label>
+    <p class="hint hidden" id="invite-via-hint"></p>
+    <div class="code-box"><code id="invite-code">Gerando…</code><button class="btn small" id="btn-copy-invite">Copiar</button></div>
+
+    <details class="help">
+      <summary>Seus amigos não conseguem conectar?</summary>
+      <p>Seu roteador precisa deixar eles entrarem. Na página do roteador, em <b>Redirecionamento de portas</b> (Port Forwarding / NAT), aponte para o IP deste PC:</p>
+      <table class="ports">
+        <tr><td>8889</td><td>TCP</td><td>vídeo (conexão)</td></tr>
+        <tr><td>9997</td><td>TCP</td><td>lista de quem está ao vivo</td></tr>
+        <tr><td>8189</td><td>UDP e TCP</td><td>vídeo (dados)</td></tr>
+      </table>
+      <p>Se sua operadora usa <b>CGNAT</b> (não dá pra abrir porta), use o <b>Tailscale</b>: todos instalam, entram na mesma rede, e você gera o convite com o IP do Tailscale (começa com 100.):</p>
+      <div class="inline-form">
+        <input id="invite-host" placeholder="ex.: 100.101.102.103" />
+        <button class="btn small" id="btn-invite-host">Gerar com este endereço</button>
+      </div>
+    </details>
+    <div class="dlg-actions"><button class="btn" data-close>Fechar</button></div>
+  </dialog>
+
+  <!-- ============ O que transmitir ============ -->
+  <dialog id="dlg-pick" class="dlg dlg-wide">
+    <h2>O que você quer mostrar?</h2>
+    <div class="tabs" role="tablist">
+      <button class="tab on" data-tab="screen" role="tab">Telas</button>
+      <button class="tab" data-tab="window" role="tab">Janelas e jogos</button>
+    </div>
+    <div class="grid" id="pick-grid"><p class="muted">Carregando…</p></div>
+    <p class="hint">Jogos: deixe em <b>janela sem bordas</b> (borderless) para capturar a janela. Em tela cheia exclusiva, compartilhe a <b>tela</b>.</p>
+    <div class="two">
+      <label class="field"><span>Som</span><select id="pick-audio"></select></label>
+      <label class="field"><span>Qualidade</span><select id="pick-quality"></select></label>
+    </div>
+    <p class="hint">Upload necessário: <b id="pick-upload">8 Mbps</b> por pessoa assistindo (se você for o host).</p>
+    <div class="dlg-actions">
+      <button class="btn" data-close>Cancelar</button>
+      <button class="btn primary" id="btn-pick-go" disabled>Começar a transmitir</button>
+    </div>
+  </dialog>
+
+  <!-- ============ Configurações ============ -->
+  <dialog id="dlg-settings" class="dlg">
+    <h2>Configurações</h2>
+    <form id="settings-form" method="dialog">
+      <label class="field"><span>Seu nome</span><input name="name" maxlength="32" required /></label>
+
+      <fieldset class="seg">
+        <label><input type="radio" name="mode" value="host" /> <span>Sou o host (sala neste PC)</span></label>
+        <label><input type="radio" name="mode" value="guest" /> <span>Entro na sala de alguém</span></label>
+      </fieldset>
+
+      <label class="field guest-only"><span>Endereço do host (IP ou domínio)</span><input name="server" placeholder="ex.: 177.10.20.30" /></label>
+      <label class="field">
+        <span>Senha da sala</span>
+        <div class="inline-form">
+          <input name="password" type="password" required />
+          <button type="button" class="btn small" id="btn-pass-show">Ver</button>
+          <button type="button" class="btn small host-only" id="btn-pass-gen">Gerar</button>
+        </div>
+      </label>
+      <label class="field"><span>Código de convite (preenche os dois campos acima)</span><input name="invite" placeholder="TELAO-…" /></label>
+
+      <h3 class="sub">Versão</h3>
+      <div class="inline-form engine-btns">
+        <span class="hint" id="ver-info" style="flex:1;margin:0">Telão</span>
+        <button type="button" class="btn small" id="btn-upd-check">Procurar atualização</button>
+      </div>
+      <div class="inline-form engine-btns">
+        <span class="hint" id="fw-info" style="flex:1;margin:0">Firewall: verificando…</span>
+        <button type="button" class="btn small" id="btn-fw2">Liberar no Firewall</button>
+      </div>
+
+      <h3 class="sub">Motor de vídeo</h3>
+      <p class="hint" id="engine-info">Codificador: detectado na primeira transmissão.</p>
+      <div class="inline-form engine-btns">
+        <button type="button" class="btn small" id="btn-diag">Testar motor</button>
+        <button type="button" class="btn small" id="btn-log">Abrir pasta do log</button>
+      </div>
+      <pre id="diag-out" class="diag hidden"></pre>
+      <button type="button" class="btn small hidden" id="btn-diag-copy">Copiar relatório</button>
+
+      <h3 class="sub">Modo leve</h3>
+      <label class="check"><input type="checkbox" name="closeToTray" /> <span><b>Fechar vai para a bandeja</b><small>Ao fechar a janela, o Telão some e fica perto do relógio gastando quase nada. A sala e o botão de transmitir continuam lá.</small></span></label>
+      <label class="check"><input type="checkbox" name="notifyLive" /> <span><b>Avisar quando alguém entrar ao vivo</b><small>Uma notificação do Windows; clique nela para assistir.</small></span></label>
+      <label class="check"><input type="checkbox" name="startWithWindows" /> <span><b>Iniciar com o Windows</b><small>Abre direto na bandeja quando você liga o PC. Bom para o host.</small></span></label>
+
+      <details class="help host-only">
+        <summary>Log do servidor</summary>
+        <pre id="host-log"></pre>
+      </details>
+
+      <p id="settings-error" class="error hidden"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-close>Cancelar</button>
+        <button type="submit" class="btn primary" value="save">Salvar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="player.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

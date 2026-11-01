@@ -1,0 +1,5 @@
+node_modules/
+dist/
+resources/gst/
+resources/bin/mediamtx.exe
+*.log

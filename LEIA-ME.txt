@@ -1,0 +1,64 @@
+TELÃO — tela compartilhada entre amigos
+=========================================
+
+INSTALAR
+1. Extraia esta pasta em qualquer lugar (ex.: Documentos\Telao).
+2. Abra o Telao.exe.
+   O Windows pode mostrar "O Windows protegeu o computador" porque o app não
+   tem assinatura paga. Clique em "Mais informações" > "Executar assim mesmo".
+3. Na primeira vez que o host abrir, o Firewall do Windows pergunta sobre o
+   "mediamtx". Marque "Redes privadas" E "Redes públicas" e permita.
+
+PREPARAR O OBS (uma vez só, em cada PC que vai transmitir)
+1. Instale o OBS Studio (obsproject.com), versão 30 ou mais nova.
+2. OBS > Ferramentas > Configurações do Servidor WebSocket:
+   - marque "Ativar servidor WebSocket"
+   - clique em "Mostrar informações de conexão" e copie a senha
+   - cole essa senha no Telão (engrenagem > OBS > Senha do WebSocket)
+3. OBS > Configurações > Saída (modo Simples ou Avançado):
+   - Codificador de vídeo: NVIDIA NVENC H.264 (ou AMD/Intel H.264 por hardware)
+     -> precisa ser H.264, não HEVC/AV1, para todo mundo conseguir assistir
+   - Taxa de bits: 6000 a 8000 Kbps (ajuste pelo seu upload)
+4. OBS > Configurações > Vídeo: 1920x1080 (ou 1280x720), 60 FPS.
+5. Na cena do OBS, adicione a fonte "Captura de Jogo" (para jogos) ou
+   "Captura de Tela/Janela" (YouTube, área de trabalho). Para o som, o OBS já
+   pega o "Áudio da Área de Trabalho".
+O Telão troca sozinho o destino da transmissão do OBS quando você clica em
+"Transmitir" e devolve a configuração antiga (Twitch etc.) quando você para.
+
+QUEM É O HOST
+O host é o PC que fica com a "sala" aberta. Ele precisa estar ligado e com o
+Telão aberto para os amigos se verem. Só um da turma é host.
+
+O host precisa liberar no roteador (Redirecionamento de portas / Port Forwarding),
+apontando para o IP local do PC dele:
+   8889  TCP
+   9997  TCP
+   8189  UDP e TCP
+Se a operadora usar CGNAT (abrir porta não funciona), usem o Tailscale
+(tailscale.com, grátis): todos instalam e entram na mesma conta/rede, e o host
+gera o convite com o IP do Tailscale (100.x.x.x) em "Convidar amigos".
+
+UPLOAD
+Todo mundo que assiste puxa o vídeo do PC do host. Se o host transmite a
+8 Mbps para 4 amigos, ele usa uns 32 Mbps de upload. Quem transmite (não sendo o
+host) só gasta o próprio upload uma vez.
+
+ASSISTIR NO NAVEGADOR (sem instalar nada)
+http://IP-DO-HOST:8889/nome-da-pessoa
+Usuário: sala   Senha: a senha da sala
+
+MODO LEVE (BANDEJA)
+Fechar a janela no X não fecha o Telão: ele vai para a bandeja (perto do
+relógio) e libera a interface, gastando quase nada enquanto você joga.
+A sala continua aberta e, pelo ícone da bandeja (botão direito), você pode:
+  - Transmitir / Parar minha transmissão (o ícone fica com bolinha vermelha ao vivo)
+  - Assistir quem está ao vivo
+  - Copiar o convite da sala
+  - Ligar/desligar avisos de "fulano está ao vivo" e "Iniciar com o Windows"
+Para fechar de vez: botão direito no ícone > Sair do Telão.
+Dá para desligar isso em Configurações > Modo leve.
+
+ATALHOS
+F = tela cheia   M = mudo   Esc = sair da tela cheia / fechar
+Clique duplo no vídeo = tela cheia
