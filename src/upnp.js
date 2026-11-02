@@ -11,32 +11,58 @@ const SEARCH_TARGETS = [
   'urn:schemas-upnp-org:device:InternetGatewayDevice:2',
 ];
 
-/* ---------- descobrir o roteador ---------- */
-function discover(timeoutMs = 3500) {
+/* ---------- descobrir o roteador ----------
+ * Pergunta por TODAS as placas de rede de casa (não só a "padrão": com Hamachi/Radmin instalados, o Windows às
+ * vezes manda a pergunta pela placa da VPN e o roteador nunca ouve). Além do grito geral (multicast), pergunta
+ * direto para o provável roteador (x.x.x.1 e o 192.168.15.1 da Vivo), que alguns só respondem assim.
+ */
+function lanAddresses() {
+  const out = [];
+  for (const list of Object.values(require('os').networkInterfaces())) {
+    for (const a of list || []) {
+      if (a.family !== 'IPv4' && a.family !== 4) continue;
+      if (a.internal) continue;
+      if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a.address)) out.push(a.address);
+    }
+  }
+  return out;
+}
+
+function discover(timeoutMs = 4500) {
   if (process.env.TELAO_UPNP_LOCATION) return Promise.resolve([process.env.TELAO_UPNP_LOCATION]); // testes
   return new Promise((resolve) => {
     const found = new Set();
-    let sock;
-    try { sock = dgram.createSocket({ type: 'udp4', reuseAddr: true }); } catch { return resolve([]); }
-    const done = () => { try { sock.close(); } catch {} resolve([...found]); };
-    sock.on('error', done);
-    sock.on('message', (msg) => {
-      const m = String(msg).match(/^location:\s*(\S+)/im);
-      if (m) found.add(m[1].trim());
-    });
-    sock.bind(0, () => {
-      for (const st of SEARCH_TARGETS) {
-        const req = `M-SEARCH * HTTP/1.1\r\nHOST: ${SSDP_ADDR}:${SSDP_PORT}\r\nMAN: "ssdp:discover"\r\nMX: 2\r\nST: ${st}\r\n\r\n`;
-        sock.send(req, SSDP_PORT, SSDP_ADDR, () => {});
-      }
-      // repete uma vez, roteadores às vezes perdem o primeiro pacote
-      setTimeout(() => {
-        for (const st of SEARCH_TARGETS.slice(0, 2)) {
-          const req = `M-SEARCH * HTTP/1.1\r\nHOST: ${SSDP_ADDR}:${SSDP_PORT}\r\nMAN: "ssdp:discover"\r\nMX: 2\r\nST: ${st}\r\n\r\n`;
-          sock.send(req, SSDP_PORT, SSDP_ADDR, () => {});
-        }
-      }, 800);
-    });
+    const socks = [];
+    const addrs = lanAddresses();
+    const binds = addrs.length ? addrs : [undefined];
+    let finished = false;
+    const done = () => {
+      if (finished) return; finished = true;
+      for (const s of socks) { try { s.close(); } catch {} }
+      resolve([...found]);
+    };
+    const msg = (st) => `M-SEARCH * HTTP/1.1\r\nHOST: ${SSDP_ADDR}:${SSDP_PORT}\r\nMAN: "ssdp:discover"\r\nMX: 2\r\nST: ${st}\r\n\r\n`;
+    for (const addr of binds) {
+      let sock;
+      try { sock = dgram.createSocket({ type: 'udp4', reuseAddr: true }); } catch { continue; }
+      socks.push(sock);
+      sock.on('error', () => { try { sock.close(); } catch {} });
+      sock.on('message', (m) => {
+        const x = String(m).match(/^location:\s*(\S+)/im);
+        if (x) { found.add(x[1].trim()); if (found.size && !finished) setTimeout(done, 600); }
+      });
+      sock.bind(0, addr, () => {
+        try { if (addr) sock.setMulticastInterface(addr); } catch {}
+        const targets = [SSDP_ADDR];
+        if (addr) targets.push(addr.replace(/\.\d+$/, '.1'));
+        if (addr && addr.startsWith('192.168.15.')) targets.push('192.168.15.1');
+        const send = (sts) => { for (const t of [...new Set(targets)]) for (const st of sts) sock.send(msg(st), SSDP_PORT, t, () => {}); };
+        send(SEARCH_TARGETS);
+        // repete: roteadores às vezes perdem o primeiro pacote
+        setTimeout(() => { if (!finished) send(SEARCH_TARGETS.slice(0, 2)); }, 900);
+        setTimeout(() => { if (!finished) send(SEARCH_TARGETS.slice(0, 2)); }, 2200);
+      });
+    }
     setTimeout(done, timeoutMs);
   });
 }

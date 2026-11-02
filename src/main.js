@@ -171,12 +171,19 @@ const upnp = createUpnp({
 });
 let netState = { status: 'idle' };
 let upnpBusy = null;
+let upnpRetryTimer = null, upnpRetryMs = 30000;
 function openPorts() {
   if (upnpBusy || !cfg.hosting) return upnpBusy;
   netState = { status: 'working' }; send('net:state', netState);
+  clearTimeout(upnpRetryTimer);
   upnpBusy = upnp.open().then(async (st) => {
     upnpBusy = null;
     netState = st; send('net:state', netState);
+    // roteador não respondeu (às vezes ainda está ligando, ou perdeu o pacote): tenta de novo sozinho
+    if (['unavailable', 'error'].includes(st.status) && cfg.hosting) {
+      upnpRetryTimer = setTimeout(openPorts, upnpRetryMs);
+      upnpRetryMs = Math.min(upnpRetryMs * 2, 10 * 60 * 1000);
+    } else upnpRetryMs = 30000;
     // com IP público de verdade, o servidor passa a anunciá-lo (ajuda o vídeo a chegar direto)
     const ext = st.externalIp;
     if (['ok', 'partial'].includes(st.status) && ext && !st.cgnat && !advertiseHosts.includes(ext) && mtx) {

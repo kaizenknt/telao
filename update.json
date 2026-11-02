@@ -1,8 +1,8 @@
 {
-  "version": "1.6.0",
+  "version": "1.6.1",
   "full": false,
   "download": "https://github.com/kaizenknt/telao#baixar",
-  "notes": "Ajuste automático de FPS (igual o Discord): se o jogo pesar, desce sozinho para 30 FPS ou 720p sem derrubar quem assiste, e volta quando der. Pode desligar nas Configurações.",
+  "notes": "Abertura de portas mais forte: procura o roteador por todas as placas de rede (Hamachi/Radmin atrapalhavam) e tenta de novo sozinho se ele não responder.",
   "files": [
     "src/assets/icon.ico",
     "src/assets/icon.png",
