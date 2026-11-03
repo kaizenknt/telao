@@ -133,9 +133,35 @@ function renderStreams() {
     li.addEventListener('click', () => watch(s.name));
     ul.appendChild(li);
   }
+  renderStageCards();
   // a transmissão que eu assistia acabou
   if (selected && lastPollOk && !streams.find((s) => s.name === selected)) {
     $('#loading-text').textContent = `${selected} parou de transmitir. Esperando voltar…`;
+  }
+}
+
+/* palco vazio: cartões grandes de quem está ao vivo (um clique para assistir) */
+function renderStageCards() {
+  const grid = $('#stage-cards');
+  const any = streams.length > 0;
+  $('#stage-empty-title').textContent = any ? (streams.length === 1 ? 'Tem gente ao vivo' : `${streams.length} pessoas ao vivo`) : 'Ninguém ao vivo ainda';
+  $('#stage-empty-sub').textContent = any ? 'Clique para assistir.' : 'Quando um amigo começar a transmitir, ele aparece aqui.';
+  show($('#stage-marquee'), !any);
+  grid.textContent = '';
+  for (const s of streams) {
+    const mine = s.name === cfg.path;
+    const b = document.createElement('button');
+    b.className = 'live-card';
+    b.style.setProperty('--h', hue(s.name));
+    b.innerHTML = `<span class="lc-top"><span class="live-badge">AO VIVO</span><span class="lc-time"></span></span>
+      <span class="avatar big"></span><b></b><small></small><span class="lc-cta"></span>`;
+    b.querySelector('.lc-time').textContent = ago(s.since);
+    b.querySelector('.avatar').textContent = initials(s.name);
+    b.querySelector('b').textContent = s.name + (mine ? ' (você)' : '');
+    b.querySelector('small').textContent = `${s.viewers} assistindo`;
+    b.querySelector('.lc-cta').textContent = mine ? 'Ver como está saindo' : 'Assistir';
+    b.addEventListener('click', () => watch(s.name));
+    grid.appendChild(b);
   }
 }
 
@@ -152,7 +178,9 @@ const player = new WhepPlayer(video, {
       why || 'Erro';
   },
   onStats: (s) => {
+    lastStats = s;
     const parts = [];
+    if (s.codec) parts.push(String(s.codec).toUpperCase());
     if (s.w) parts.push(`${s.w}×${s.h}`);
     if (s.fps) parts.push(`${Math.round(s.fps)} fps`);
     if (s.mbps != null) parts.push(`${s.mbps.toFixed(1)} Mbps`);
@@ -170,6 +198,38 @@ const player = new WhepPlayer(video, {
   },
 });
 
+/* ---------- quem assiste conta para quem transmite como está chegando ---------- */
+let lastStats = null, fbTimer = null, av1HwPromise = null, av1LocalBad = 0;
+function canAv1() {
+  // AV1 só se a placa abre por hardware (senão pesa no processador)
+  if (!av1HwPromise) av1HwPromise = (async () => {
+    if (cfg.av1Bad) return false;
+    try {
+      const r = await navigator.mediaCapabilities.decodingInfo({ type: 'webrtc',
+        video: { contentType: 'video/AV1', width: 1920, height: 1080, bitrate: 8000000, framerate: 60 } });
+      return !!(r.supported && r.powerEfficient);
+    } catch { return false; }
+  })();
+  return av1HwPromise;
+}
+function startFeedback(name) {
+  clearInterval(fbTimer);
+  lastStats = null; av1LocalBad = 0;
+  fbTimer = setInterval(async () => {
+    if (selected !== name || name === cfg.path) return;
+    const s = lastStats || {};
+    let av1 = await canAv1();
+    // recebendo AV1 e o PC descartando quadros: avisa que AV1 não serve aqui (e guarda para a próxima)
+    if (av1 && /av1/i.test(s.codec || '') && s.verdict?.kind === 'local') {
+      if (++av1LocalBad >= 4) { av1 = false; av1HwPromise = Promise.resolve(false); cfg = await api.cfg.set({ av1Bad: true }); }
+    } else av1LocalBad = 0;
+    api.rooms.feedback({
+      path: name, viewer: cfg.name, av1,
+      verdict: s.verdict?.kind || null, loss: s.lossPct ?? null, fps: s.arrivingFps ?? s.fps ?? null,
+    }).catch(() => {});
+  }, 3000);
+}
+
 async function watch(name) {
   goneCount = 0;
   selected = name;
@@ -181,11 +241,16 @@ async function watch(name) {
   renderStreams();
   const host = await api.serverHost();
   const auth = await api.authHeader();
-  player.play(`http://${host}:${cfg.ports.webrtc}/${encodeURIComponent(name)}/whep`, auth);
+  // se identifica para quem transmite: nome e se abre AV1 (ele escolhe o formato pela sala)
+  const av1 = await canAv1();
+  const qs = `?tv=1&n=${encodeURIComponent(cfg.name)}&av1=${av1 ? 1 : 0}`;
+  player.play(`http://${host}:${cfg.ports.webrtc}/${encodeURIComponent(name)}/whep${qs}`, auth);
+  startFeedback(name);
 }
 
 function closePlayer() {
   selected = null;
+  clearInterval(fbTimer);
   player.stop();
   show($('#player'), false);
   show($('#stage-empty'));
@@ -238,18 +303,63 @@ function renderStream() {
   if (!live) { show($('#st-fps'), false); if (!busy) show($('#st-tip'), false); }
   const srcLine = $('#st-source');
   show(srcLine, (live || busy) && !!stState.source);
-  srcLine.textContent = stState.source ? `${stState.source} · ${stState.quality || ''}${stState.encoder ? ' · ' + stState.encoder : ''}` : '';
+  srcLine.textContent = '';
+  if (stState.source) {
+    const chips = [
+      [stState.source, 'src'], [stState.quality, ''], [stState.codec, stState.codec === 'AV1' ? 'av1' : ''],
+      [stState.kbpsScale && stState.kbpsScale < 1 ? `taxa ${Math.round(stState.kbpsScale * 100)}%` : null, 'warn'],
+      [stState.audioLabel ? '♪ ' + stState.audioLabel : null, 'audio'],
+    ];
+    for (const [t, c] of chips) {
+      if (!t) continue;
+      const sp = document.createElement('span');
+      sp.className = 'chip ' + c; sp.textContent = t; sp.title = t;
+      srcLine.appendChild(sp);
+    }
+  }
+  if (!live) show($('#st-viewers'), false);
+  show($('#st-hint'), !live);
   $('#st-hint').textContent =
-    live ? `Você está ao vivo como “${cfg.path}”.` :
+    live ? '' :
     busy ? (stState.detail || 'Iniciando…') :
     st === 'erro' ? (stState.detail || 'Erro.').split('\n')[0] :
     'Captura e compressão pela placa de vídeo — não trava em jogo.';
 }
+// quem está assistindo você, com uma bolinha de como está chegando para cada um
+const VERDICT_UI = {
+  ok: ['good', 'liso'], rede: ['bad', 'internet oscilando'], instavel: ['bad', 'internet oscilando'],
+  origem: ['warn', 'seu PC mandando menos'], local: ['warn', 'PC dele sofrendo'],
+};
+let lastViewersKey = '';
+api.stream.onViewers((list) => {
+  const others = (list || []).filter((v) => !v.self);
+  const box = $('#st-viewers'), ul = $('#st-viewers-list');
+  show(box, stState.state === 'ao-vivo' && others.length > 0);
+  const key = JSON.stringify(others);
+  if (key === lastViewersKey) return;
+  lastViewersKey = key;
+  ul.textContent = '';
+  for (const v of others) {
+    const [cls, text] = v.verdict ? VERDICT_UI[v.verdict] || ['unk', ''] : ['unk', v.known ? 'medindo…' : 'Telão antigo (sem medição)'];
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="q-dot"></span><b></b><small></small>';
+    li.querySelector('.q-dot').className = 'q-dot ' + cls;
+    li.querySelector('b').textContent = v.name;
+    const extra = v.verdict && v.loss != null && v.loss >= 0.5 ? ` · ${v.loss}% perda` : '';
+    li.querySelector('small').textContent = text + extra;
+    li.title = `${v.name}: ${text}${extra}`;
+    ul.appendChild(li);
+  }
+});
 api.stream.onState((s) => {
   const was = stState.state;
   stState = s;
   renderStream();
-  if (was !== 'ao-vivo' && s.state === 'ao-vivo') toast('Você está ao vivo!');
+  if (was !== 'ao-vivo' && s.state === 'ao-vivo') {
+    toast('Você está ao vivo!');
+    const card = $('#card-transmit');
+    card.classList.remove('just-live'); void card.offsetWidth; card.classList.add('just-live');
+  }
   if (s.state === 'erro') toast(String(s.detail || 'Erro').split('\n')[0], 7000);
 });
 api.stream.onNotice((m) => toast(m, 6000));
@@ -258,9 +368,13 @@ api.stream.onNotice((m) => toast(m, 6000));
 api.stream.onFps((f) => {
   const el = $('#st-fps');
   if (!f) { show(el, false); return; }
-  const low = (n) => (n < f.target - 6 ? ' class="low"' : '');
-  el.innerHTML = `capturando <b${low(f.capFps)}>${f.capFps}</b> · enviando <b${low(f.encFps)}>${f.encFps}</b> de ${f.target} FPS`
-    + (f.autoActive ? ' · <span class="auto">ajuste automático</span>' : '');
+  const bar = (label, n) => {
+    const pct = Math.max(4, Math.min(100, Math.round((n / f.target) * 100)));
+    const cls = n < f.target - 6 ? 'low' : '';
+    return `<span class="m ${cls}"><span class="m-l">${label}</span><span class="m-bar"><i style="width:${pct}%"></i></span><b>${n}</b></span>`;
+  };
+  el.innerHTML = bar('Captura', f.capFps) + bar('Envio', f.encFps)
+    + `<span class="m-foot">meta ${f.target} FPS${f.autoActive ? ' · <span class="auto">ajuste automático ativo</span>' : ''}</span>`;
   if (f.auto) show($('#st-tip'), false);
   show(el, stState.state === 'ao-vivo');
   if (f.hint) showFpsTip(f.hint);
@@ -341,8 +455,8 @@ function renderPicker() {
   const prev = au.value || (cfg.lastStream?.audio) || 'auto';
   au.textContent = '';
   if (sel?.kind === 'window') au.add(new Option('Só o som desta janela (recomendado)', 'auto'));
-  else au.add(new Option('Som do PC todo (menos o Telão)', 'auto'));
-  if (sel?.kind === 'window') au.add(new Option('Som do PC todo (menos o Telão)', 'pc'));
+  else au.add(new Option('Automático: só o jogo em tela cheia (sem a voz do Discord)', 'auto'));
+  au.add(new Option('Som do PC todo (menos o Telão)', 'pc'));
   for (const w of pickSources.filter((x) => x.kind === 'window' && x.id !== sel?.id)) au.add(new Option(`Só o som de: ${w.name.slice(0, 50)}`, 'app:' + w.id));
   au.add(new Option('Sem som', 'none'));
   au.value = [...au.options].some((o) => o.value === prev) ? prev : 'auto';
@@ -382,17 +496,23 @@ api.host.onLog((line) => {
 });
 
 let inviteOpts = [];
+const INVITE_BASE = 'https://kaizenknt.github.io/telao/#';
+function setInviteCode(code) {
+  const ok = /^TELAO-/.test(code || '');
+  $('#invite-code').textContent = ok ? code : '…';
+  $('#invite-link').textContent = ok ? INVITE_BASE + code : code;
+}
 async function openInvite() {
   const dlg = $('#dlg-invite');
   const code = $('#invite-code');
   show(dlg.querySelector('.help'), cfg.hosting);
   show($('#invite-via-wrap'), false); show($('#invite-via-hint'), false);
   dlg.showModal();
-  if (!cfg.hosting) { code.textContent = await api.host.inviteFor(cfg.server); return; }
-  code.textContent = 'Descobrindo seus endereços…';
+  if (!cfg.hosting) { setInviteCode(await api.host.inviteFor(cfg.server)); return; }
+  setInviteCode('Descobrindo seus endereços…');
   const r = await api.host.invite();
   inviteOpts = r.options || [];
-  if (!inviteOpts.length) { code.textContent = 'Não consegui descobrir seu IP. Use o campo do Hamachi/Tailscale abaixo.'; return; }
+  if (!inviteOpts.length) { setInviteCode('Não consegui descobrir seu IP. Use o campo do Hamachi/Tailscale abaixo.'); return; }
   const sel = $('#invite-via');
   sel.textContent = '';
   inviteOpts.forEach((o, i) => sel.add(new Option(o.label + (i === 0 && o.kind !== 'internet' ? ' (recomendado)' : ''), String(i))));
@@ -403,7 +523,7 @@ async function openInvite() {
 function renderInviteVia(userPicked) {
   const o = inviteOpts[+$('#invite-via').value || 0];
   if (!o) return;
-  $('#invite-code').textContent = o.invite;
+  setInviteCode(o.invite);
   const hint = $('#invite-via-hint');
   hint.textContent = o.kind === 'internet'
     ? 'Esse endereço só funciona se as portas estiverem abertas no seu roteador.'
@@ -419,12 +539,17 @@ $('#btn-invite').addEventListener('click', openInvite);
 $('#btn-copy-invite').addEventListener('click', async () => {
   const t = $('#invite-code').textContent;
   if (!t.startsWith('TELAO-')) return;
-  await api.util.copy(t); toast('Convite copiado. Manda no grupo!');
+  await api.util.copy(`Entra na minha sala do Telão: ${INVITE_BASE}${t}`); toast('Link copiado. Manda no grupo!');
+});
+$('#btn-copy-code').addEventListener('click', async () => {
+  const t = $('#invite-code').textContent;
+  if (!t.startsWith('TELAO-')) return;
+  await api.util.copy(t); toast('Código copiado.');
 });
 $('#btn-invite-host').addEventListener('click', async () => {
   const h = $('#invite-host').value.trim();
   if (!h) return;
-  $('#invite-code').textContent = await api.host.inviteFor(h);
+  setInviteCode(await api.host.inviteFor(h));
 });
 
 /* ---------- configurações ---------- */
@@ -551,6 +676,34 @@ $('#btn-upd-check').addEventListener('click', async () => { updState = await api
 
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
 
+/* ---------- convite aberto por link ---------- */
+async function handleInvite(code) {
+  if (!code) return;
+  const inv = await api.invite.read(code);
+  if (!inv) return toast('Esse link de convite não é válido.');
+  // primeira vez: só preenche o convite no cadastro
+  if (!$('#onboarding').classList.contains('hidden') || !cfg.name) {
+    const guest = document.querySelector('.choice[data-mode=guest]');
+    if (guest) guest.click();
+    $('#ob-invite').value = code; $('#ob-invite').dispatchEvent(new Event('input'));
+    $('#ob-name').focus();
+    return toast('Convite carregado. Coloque seu nome e clique em "Entrar na sala".');
+  }
+  if (!cfg.hosting && cfg.server === inv.server && cfg.password === inv.password) return toast('Você já está nessa sala.');
+  $('#join-text').textContent = `Entrar na sala em ${inv.server}?`;
+  const warn = cfg.hosting ? 'A sala que está aberta neste PC vai fechar (seus amigos saem dela).'
+    : stState.state === 'ao-vivo' ? 'Sua transmissão atual vai parar.' : '';
+  $('#join-warn').textContent = warn; show($('#join-warn'), !!warn);
+  $('#btn-join').onclick = async () => {
+    $('#dlg-join').close();
+    if (stState.state === 'ao-vivo' || stState.state === 'iniciando') await api.stream.stop();
+    cfg = await api.cfg.set({ hosting: false, server: inv.server, password: inv.password });
+    location.reload();
+  };
+  $('#dlg-join').showModal();
+}
+api.invite.onOpen((code) => handleInvite(code));
+
 /* ---------- início ---------- */
 (async () => {
   cfg = await api.cfg.get();
@@ -558,4 +711,5 @@ document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('cli
   hostState = st.state;
   if (!cfg.name || !cfg.password || (!cfg.hosting && !cfg.server)) setupOnboarding();
   else startApp();
+  handleInvite(await api.invite.pending());
 })();

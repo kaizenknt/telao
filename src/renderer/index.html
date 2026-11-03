@@ -79,6 +79,10 @@
         </div>
         <p class="st-source hidden" id="st-source"></p>
         <p class="st-fps hidden" id="st-fps"></p>
+        <div class="st-viewers hidden" id="st-viewers">
+          <span class="st-viewers-title">Assistindo</span>
+          <ul id="st-viewers-list"></ul>
+        </div>
         <div class="st-tip hidden" id="st-tip">
           <span id="st-tip-text"></span>
           <button class="btn small primary" id="btn-tip"></button>
@@ -100,9 +104,10 @@
 
     <main class="stage" id="stage">
       <div class="stage-empty" id="stage-empty">
-        <div class="marquee"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
-        <h1 id="stage-empty-title">Escolha alguém ao vivo</h1>
-        <p id="stage-empty-sub">Quando um amigo começar a transmitir, ele aparece na lista à esquerda.</p>
+        <div class="marquee" id="stage-marquee"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        <h1 id="stage-empty-title">Ninguém ao vivo ainda</h1>
+        <p id="stage-empty-sub">Quando um amigo começar a transmitir, ele aparece aqui.</p>
+        <div class="stage-cards" id="stage-cards"></div>
       </div>
 
       <div class="player hidden" id="player">
@@ -131,12 +136,20 @@
   </div>
 
   <!-- ============ Convite ============ -->
+  <dialog id="dlg-join" class="dlg">
+    <h2>Entrar na sala?</h2>
+    <p class="muted" id="join-text">Você recebeu um convite para uma sala do Telão.</p>
+    <p class="hint warn hidden" id="join-warn"></p>
+    <div class="dlg-actions"><button class="btn" data-close>Agora não</button><button class="btn primary" id="btn-join">Entrar</button></div>
+  </dialog>
+
   <dialog id="dlg-invite" class="dlg">
     <h2>Convidar amigos</h2>
-    <p class="muted">Mande este código pros seus amigos. Eles colam no Telão deles e pronto.</p>
+    <p class="muted">Mande este link no grupo. Seu amigo clica e o Telão dele já abre dentro da sala (se ainda não tiver o Telão, a página manda baixar).</p>
     <label class="field hidden" id="invite-via-wrap"><span>Endereço da sala</span><select id="invite-via"></select></label>
     <p class="hint hidden" id="invite-via-hint"></p>
-    <div class="code-box"><code id="invite-code">Gerando…</code><button class="btn small" id="btn-copy-invite">Copiar</button></div>
+    <div class="code-box link-box"><code id="invite-link">Gerando…</code><button class="btn small primary" id="btn-copy-invite">Copiar link</button></div>
+    <p class="hint invite-code-line">Ou o código, para colar no app: <code id="invite-code">…</code> <button class="linkish" id="btn-copy-code">copiar código</button></p>
 
     <details class="help">
       <summary>Seus amigos não conseguem conectar?</summary>

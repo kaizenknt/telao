@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Convite do Telão</title>
+<meta name="description" content="Você foi convidado para uma sala do Telão: compartilhamento de tela entre amigos." />
+<meta property="og:title" content="Entra na minha sala do Telão" />
+<meta property="og:description" content="Clique para abrir o Telão já dentro da sala." />
+<meta name="theme-color" content="#0e0d0c" />
+<style>
+  :root {
+    --bg: #0e0d0c; --panel: #171513; --panel-2: #1f1c19; --line: #2c2824;
+    --text: #f2ede6; --muted: #9b928a; --amber: #ffb02e; --amber-ink: #1a1203; --live: #ff4d3d;
+    --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --display: "Segoe UI Variable Display", "Bahnschrift", "Segoe UI", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg); color: var(--text); font: 15px/1.5 var(--font); -webkit-font-smoothing: antialiased;
+    min-height: 100vh; display: grid; place-items: center; padding: 32px 16px;
+    background-image: radial-gradient(60rem 30rem at 50% -10%, #ffb02e14, transparent 60%);
+  }
+  .card { width: 100%; max-width: 460px; text-align: center; }
+  .brand { font-family: var(--display); font-weight: 800; letter-spacing: .18em; font-size: 26px; display: inline-flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+  .mark { width: 32px; height: 22px; border: 3px solid var(--amber); border-radius: 5px; position: relative; box-shadow: 0 0 18px #ffb02e66; }
+  .mark::after { content: ""; position: absolute; left: 50%; bottom: -9px; width: 12px; height: 3px; background: var(--amber); transform: translateX(-50%); border-radius: 2px; }
+  .live { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 4px #ff4d3d22; animation: p 1.6s ease-in-out infinite; }
+  @keyframes p { 50% { box-shadow: 0 0 0 7px #ff4d3d08; } }
+  h1 { font-family: var(--display); font-size: clamp(26px, 6vw, 34px); line-height: 1.15; margin: 12px 0 10px; letter-spacing: -.01em; }
+  p { color: var(--muted); margin: 0 0 24px; }
+  .btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); padding: 14px 18px; border-radius: 12px; font: 600 15px var(--font); text-decoration: none; cursor: pointer; transition: background .15s, transform .05s; }
+  .btn:hover { background: #26221e; }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--amber); color: var(--amber-ink); border-color: transparent; font-size: 16px; padding: 16px 18px; }
+  .btn.primary:hover { background: #ffc052; }
+  .stack { display: grid; gap: 10px; }
+  .steps { margin: 28px 0 0; padding: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; text-align: left; font-size: 14px; }
+  .steps b { color: var(--text); }
+  .steps ol { margin: 8px 0 0; padding-left: 20px; color: var(--muted); display: grid; gap: 6px; }
+  .code { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+  .code code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px "Cascadia Mono", Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; color: var(--muted); }
+  .code button { flex: none; width: auto; padding: 9px 12px; font-size: 13px; }
+  .bad { color: #ffc966; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line); padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.on { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .live i { animation: none; } }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand"><span class="mark"></span>TELÃO</div>
+    <div id="ok">
+      <span class="live"><i></i>Convite para a sala</span>
+      <h1>Seu amigo te chamou para assistir</h1>
+      <p>Clique abaixo e o Telão abre direto na sala dele.</p>
+      <div class="stack">
+        <button class="btn primary" id="open">Abrir no Telão</button>
+        <a class="btn" id="dl" href="https://github.com/kaizenknt/telao/releases/latest">Ainda não tenho o Telão: baixar</a>
+      </div>
+      <div class="steps">
+        <b>Não abriu?</b>
+        <ol>
+          <li>Baixe e abra o Telão uma vez (ele se registra para abrir estes links).</li>
+          <li>Volte aqui e clique em <b>Abrir no Telão</b> de novo.</li>
+          <li>Ou copie o código e cole no Telão, no campo do convite:</li>
+        </ol>
+        <div class="code"><code id="code"></code><button class="btn" id="copy">Copiar</button></div>
+      </div>
+    </div>
+    <div id="none" hidden>
+      <h1>Link incompleto</h1>
+      <p class="bad">Esse link de convite veio sem o código. Peça para seu amigo copiar o link de novo no Telão (botão “Convidar amigos”).</p>
+      <a class="btn" href="https://github.com/kaizenknt/telao/releases/latest">Baixar o Telão</a>
+    </div>
+  </main>
+  <div class="toast" id="toast"></div>
+<script>
+  (function () {
+    var m = decodeURIComponent(location.hash || '').match(/TELAO-[A-Za-z0-9_-]+/);
+    if (!m) { document.getElementById('ok').hidden = true; document.getElementById('none').hidden = false; return; }
+    var code = m[0];
+    document.getElementById('code').textContent = code;
+    var toast = function (t) { var el = document.getElementById('toast'); el.textContent = t; el.classList.add('on'); setTimeout(function () { el.classList.remove('on'); }, 2200); };
+    var open = function () { location.href = 'telao://entrar/' + code; };
+    document.getElementById('open').addEventListener('click', open);
+    document.getElementById('copy').addEventListener('click', function () {
+      (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(function () { toast('Código copiado'); }, function () {
+        var r = document.createRange(); r.selectNodeContents(document.getElementById('code'));
+        var s = getSelection(); s.removeAllRanges(); s.addRange(r); toast('Selecionado: aperte Ctrl+C');
+      });
+    });
+    // no PC, já tenta abrir sozinho (o navegador pergunta se pode abrir o Telão)
+    if (!/Android|iPhone|iPad/i.test(navigator.userAgent)) setTimeout(open, 600);
+  })();
+</script>
+</body>
+</html>

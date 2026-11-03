@@ -1,8 +1,8 @@
 {
-  "version": "1.6.1",
+  "version": "1.7.0",
   "full": false,
   "download": "https://github.com/kaizenknt/telao#baixar",
-  "notes": "Abertura de portas mais forte: procura o roteador por todas as placas de rede (Hamachi/Radmin atrapalhavam) e tenta de novo sozinho se ele não responder.",
+  "notes": "AV1 automático (imagem mais nítida quando todos abrem), lista de quem está assistindo com a qualidade de cada um, taxa se ajusta à internet de quem assiste, som só do jogo (sem a voz do Discord), convite por link e visual novo.",
   "files": [
     "src/assets/icon.ico",
     "src/assets/icon.png",
@@ -17,6 +17,7 @@
     "src/renderer/index.html",
     "src/renderer/player.js",
     "src/renderer/style.css",
+    "src/roomproxy.js",
     "src/system.js",
     "src/upnp.js",
     "src/version.js"

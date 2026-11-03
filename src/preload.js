@@ -9,7 +9,7 @@ const on = (ch) => (fn) => {
 
 contextBridge.exposeInMainWorld('telao', {
   cfg: { get: call('cfg:get'), set: call('cfg:set') },
-  invite: { read: call('invite:read') },
+  invite: { read: call('invite:read'), pending: call('invite:pending'), onOpen: on('invite:open') },
   authHeader: call('auth:header'),
   serverHost: call('server:host'),
   host: {
@@ -17,11 +17,11 @@ contextBridge.exposeInMainWorld('telao', {
     invite: call('host:invite'), inviteFor: call('host:inviteFor'), remember: call('invite:remember'),
     onState: on('host:state'), onLog: on('host:log'),
   },
-  rooms: { list: call('rooms:list') },
+  rooms: { list: call('rooms:list'), feedback: call('rooms:feedback') },
   stream: {
     sources: call('stream:sources'), start: call('stream:start'), stop: call('stream:stop'), state: call('stream:state'),
     qualities: call('stream:qualities'), diagnose: call('stream:diagnose'), openLog: call('stream:openLog'),
-    onState: on('stream:state'), onNotice: on('stream:notice'), onFps: on('stream:fps'),
+    onState: on('stream:state'), onNotice: on('stream:notice'), onFps: on('stream:fps'), onViewers: on('stream:viewers'),
   },
   util: { copy: call('util:copy'), open: call('util:open') },
   win: { fullscreen: call('win:fullscreen'), onFullscreen: on('win:fullscreen') },

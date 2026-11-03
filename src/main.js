@@ -23,8 +23,9 @@ const { spawn } = require('child_process');
 const createEngine = require('./engine');
 const sys = require('./system');
 const { createUpnp } = require('./upnp');
+const { createRoomProxy } = require('./roomproxy');
 
-const PORTS = { webrtc: 8889, ice: 8189, api: 9997 };
+const PORTS = { webrtc: 8889, ice: 8189, api: 9997, apiInner: 9996 }; // 9997 = porteiro (roomproxy), 9996 = API do MediaMTX só por dentro
 const ROOM_USER = 'sala';
 
 let win = null;
@@ -44,7 +45,9 @@ const DEFAULTS = {
   name: '', server: '', password: '', hosting: false, encoder: null, encoderGst: null, lastStream: null,
   closeToTray: true, startWithWindows: false, notifyLive: true, trayHintShown: false,
   preferVpn: null,
-  autoFps: true, // troca sozinho para menos FPS/resolução quando o jogo ou o codificador não dá conta (igual o Discord) // VPN que o host escolheu por último para os convites (ex.: "Hamachi")
+  autoFps: true,
+  codecPref: 'auto', // 'auto' = AV1 quando todos que assistem abrem; 'h264' = sempre H.264
+  av1Bad: false,     // este PC já mostrou que não dá conta de abrir AV1 // troca sozinho para menos FPS/resolução quando o jogo ou o codificador não dá conta (igual o Discord) // VPN que o host escolheu por último para os convites (ex.: "Hamachi")
 };
 function loadCfg() {
   try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; }
@@ -93,7 +96,7 @@ authInternalUsers:
       - action: api
 
 api: true
-apiAddress: :${PORTS.api}
+apiAddress: 127.0.0.1:${PORTS.apiInner}
 apiAllowOrigins: ["*"]
 
 rtsp: false
@@ -119,8 +122,20 @@ paths:
 
 function setMtxState(s, detail) { mtxState = s; send('host:state', { state: s, detail }); }
 
+// porteiro da sala na porta 9997: repassa a API e guarda os relatos de quem assiste
+const roomProxy = createRoomProxy({ listenPort: PORTS.api, targetPort: PORTS.apiInner, user: ROOM_USER, getPassword: () => cfg.password,
+  log: (m) => { mtxLog.push(m); if (mtxLog.length > 300) mtxLog.shift(); send('host:log', m); } });
+let proxyOn = false;
+
 function startHost() {
   if (mtx) return { ok: true };
+  if (!proxyOn) {
+    proxyOn = true;
+    roomProxy.start().catch((e) => {
+      proxyOn = false;
+      setMtxState('erro', /EADDRINUSE/.test(e.code || e.message) ? 'A porta 9997 já está em uso. Feche outro Telão/MediaMTX aberto.' : 'Porteiro da sala: ' + e.message);
+    });
+  }
   if (!cfg.password) return { ok: false, error: 'Defina uma senha para a sala primeiro.' };
   const bin = mediamtxBin();
   if (!fs.existsSync(bin)) return { ok: false, error: 'Servidor não encontrado em ' + bin };
@@ -137,7 +152,7 @@ function startHost() {
       send('host:log', line);
       if (/\[API\] started/.test(line)) { setMtxState('rodando'); openPorts(); }
       if (/address already in use|bind:|Only one usage of each socket address/i.test(line))
-        setMtxState('erro', 'Uma porta (8889, 8189 ou 9997) já está em uso. Feche outro Telão/MediaMTX aberto.');
+        setMtxState('erro', 'Uma porta (8889, 8189, 9996 ou 9997) já está em uso. Feche outro Telão/MediaMTX aberto.');
     }
   };
   mtx.stdout.on('data', onData);
@@ -158,7 +173,10 @@ function stopHost() {
     const t = setTimeout(done, 3000);
     proc.once('exit', done);
     try { proc.kill(); } catch { done(); }
-  }).then(() => { mtx = null; setMtxState('parado'); });
+  }).then(async () => {
+    mtx = null; setMtxState('parado');
+    if (proxyOn && !cfg.hosting) { proxyOn = false; await roomProxy.stop(); }
+  });
 }
 
 /* ---------------- Portas no roteador (UPnP) ---------------- */
@@ -277,7 +295,18 @@ function registerIpc() {
     updateTray();
     return { ...cfg, path: slug(cfg.name), ports: PORTS };
   });
-  ipcMain.handle('invite:read', (_e, code) => readInvite(code));
+  ipcMain.handle('invite:read', (_e, code) => readInvite(String(code || '').trim().replace(/^.*#(TELAO-)/, '$1')));
+  ipcMain.handle('invite:pending', () => { const c = pendingInvite; pendingInvite = null; return c; });
+  // quem assiste manda para a sala como está chegando (o porteiro da sala guarda; quem transmite lê)
+  ipcMain.handle('rooms:feedback', async (_e, fb) => {
+    try {
+      const r = await fetch(`http://${serverHost()}:${PORTS.api}/telao/fb`, {
+        method: 'POST', headers: { Authorization: basicAuth(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(fb), signal: AbortSignal.timeout(3000),
+      });
+      return r.ok;
+    } catch { return false; }
+  });
   ipcMain.handle('auth:header', () => basicAuth());
   ipcMain.handle('server:host', () => serverHost());
 
@@ -469,7 +498,30 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // o servidor recusa pedidos de vídeo vindos da origem "null" que o file:// usa.
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: false, supportFetchAPI: true, corsEnabled: true } }]);
 if (!app.requestSingleInstanceLock()) app.quit();
-app.on('second-instance', () => showWindow());
+
+/* ---------------- Convite por link (telao://entrar/TELAO-...) ----------------
+ * O link do convite abre uma página no GitHub, que chama telao://entrar/<código>. O Windows entrega isso
+ * para o Telão (aberto ou não), e a interface pergunta se quer entrar na sala.
+ */
+let pendingInvite = null;
+function inviteFromArgv(argv) {
+  for (const a of argv || []) {
+    const m = String(a).match(/^telao:\/\/(?:entrar\/)?(TELAO-[A-Za-z0-9_-]+)/i);
+    if (m) return m[1];
+  }
+  return null;
+}
+function deliverInvite(code) {
+  if (!code || !readInvite(code)) return;
+  pendingInvite = code;
+  showWindow();
+  if (win && !win.webContents.isLoading()) win.webContents.send('invite:open', code);
+}
+pendingInvite = inviteFromArgv(process.argv);
+app.on('second-instance', (_e, argv) => {
+  const code = inviteFromArgv(argv);
+  if (code) deliverInvite(code); else showWindow();
+});
 if (process.platform === 'win32') app.setAppUserModelId('br.kaike.telao');
 
 app.whenReady().then(() => {
@@ -490,6 +542,11 @@ app.whenReady().then(() => {
     getCfg: () => cfg, setCfg: (patch) => { cfg = saveCfg({ ...cfg, ...patch }); },
     send, slug, serverHost, PORTS, ROOM_USER, apiFetch,
   });
+  // registra o telao:// no Windows (aponta para este Telão)
+  try {
+    if (process.defaultApp) app.setAsDefaultProtocolClient('telao', process.execPath, [path.resolve(process.argv[1] || '.')]);
+    else app.setAsDefaultProtocolClient('telao');
+  } catch {}
   registerIpc();
   createTray();
   // Iniciado junto com o Windows: abre direto na bandeja, sem janela.

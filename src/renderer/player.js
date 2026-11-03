@@ -150,7 +150,9 @@ function verdict(h) {
   const loss = avg('lossPct'), arriving = avg('arrivingFps'), dropped = avg('droppedFps'), freeze = avg('freezeMs');
   if (loss > 1) return { kind: 'rede', text: `Rede: ${loss.toFixed(1)}% dos pacotes se perdendo no caminho` };
   if (freeze > 150) return { kind: 'rede', text: `Rede instável: o vídeo está travando ~${Math.round(freeze)} ms por segundo (a internet oscilando)` };
-  if (arriving < 50 && loss <= 1) return { kind: 'origem', text: `O PC de quem transmite está mandando só ${Math.round(arriving)} quadros/s (jogo pesando no PC dele)` };
+  // ~30 quadros/s certinho = quem transmite escolheu (ou o ajuste automático pôs) 30 FPS: está liso
+  const steady30 = Math.abs(arriving - 30) <= 3;
+  if (arriving < 50 && !steady30 && loss <= 1) return { kind: 'origem', text: `O PC de quem transmite está mandando só ${Math.round(arriving)} quadros/s (jogo pesando no PC dele)` };
   if (dropped > 3) return { kind: 'local', text: `Seu PC está descartando ${Math.round(dropped)} quadros/s ao mostrar o vídeo` };
   return { kind: 'ok', text: 'Tudo certo: chegando liso' };
 }

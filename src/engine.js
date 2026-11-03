@@ -44,6 +44,17 @@ const ENCODERS = [
     min: (b) => `openh264enc bitrate=${b * 1000}` },
 ];
 
+// AV1: mesma placa, mesmo custo, imagem bem melhor com a mesma internet (RTX 40+, Radeon RX 7000+, Intel Arc).
+const AV1_ENCODERS = {
+  nvenc: { full: (b, g) => `nvd3d11av1enc bitrate=${b} rc-mode=cbr gop-size=${g} preset=p4 tune=ultra-low-latency`,
+           min: (b) => `nvd3d11av1enc bitrate=${b}` },
+  amf:   { full: (b, g) => `amfav1enc bitrate=${b} rate-control=cbr gop-size=${g} usage=ultra-low-latency`,
+           min: (b) => `amfav1enc bitrate=${b}` },
+  qsv:   { full: (b, g) => `qsvav1enc bitrate=${b} rate-control=cbr gop-size=${g}`,
+           min: (b) => `qsvav1enc bitrate=${b}` },
+};
+const GST_VER = '1.28.8';
+
 const q = (v) => `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`; // aspas no formato do GStreamer
 
 module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost, PORTS, ROOM_USER, apiFetch }) {
@@ -89,6 +100,7 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
   let state = { state: 'parado' };
   let lastErrors = [];
   let liveCheck = null;
+  let av1 = { ok: false };
   // ajuste automático (como o Discord): qualidade que a pessoa escolheu x a que está rodando agora
   const auto = { userQuality: null, upTimer: null, backoffMs: 5 * 60 * 1000, probing: false, probeOkTimer: null };
   function resetAuto() {
@@ -97,7 +109,8 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
   }
 
   function setState(s) {
-    state = { ...s, source: current?.sourceName, quality: current && QUALITY[current.quality]?.label, encoder: current?.encoderLabel };
+    state = { ...s, source: current?.sourceName, quality: current && QUALITY[current.quality]?.label, encoder: current?.encoderLabel,
+      codec: current?.codec === 'av1' ? 'AV1' : 'H.264', audioLabel: current?.audioLabel || null, kbpsScale: current?.kbpsScale ?? 1 };
     send('stream:state', state);
   }
 
@@ -158,6 +171,24 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
     return { id: null, tried };
   }
 
+  // a placa comprime em AV1? (testa uma vez e guarda)
+  async function detectAv1(encoder) {
+    const cfg = getCfg();
+    if (cfg.av1 && cfg.av1.enc === encoder.id && cfg.av1.gst === GST_VER) return cfg.av1;
+    const a = AV1_ENCODERS[encoder.id];
+    let res = { ok: false, enc: encoder.id, gst: GST_VER };
+    if (a) {
+      for (const variant of ['full', 'min']) {
+        const pipe = `d3d11testsrc num-buffers=30 ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12,width=1280,height=720 ! ${a[variant](4000, 60)} ! av1parse ! rtpav1pay ! fakesink`;
+        const r = await runOnce(split(pipe), 20000);
+        log(`teste AV1 ${encoder.id}/${variant}: ${r.ok ? 'OK' : 'falhou'}`, r.ok ? '' : r.out.slice(-400));
+        if (r.ok) { res = { ok: true, variant, enc: encoder.id, gst: GST_VER }; break; }
+      }
+    }
+    setCfg({ av1: res });
+    return res;
+  }
+
   /* ---------- fontes (telas e janelas) ---------- */
   async function sources() {
     const list = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true });
@@ -187,6 +218,64 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
       execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 8000 }, (err, out) => {
         const pid = Number(String(out || '').trim());
         resolve(!err && pid > 0 ? pid : null);
+      });
+    });
+  }
+
+  /* ---------- som automático: só o jogo, nunca a voz do Discord/WhatsApp ----------
+   * Procura, de cima para baixo, uma janela que cobre a tela inteira que está sendo transmitida (o jogo em
+   * tela cheia ou sem bordas). Também acha o processo principal do Discord e do WhatsApp para deixá-los de fora.
+   */
+  const NOT_GAME = /^(explorer|telao|tel(ã|a)o|electron|shellexperiencehost|startmenuexperiencehost|searchhost|textinputhost|applicationframehost|lockapp|systemsettings|discord|whatsapp|whatsapp\.root|msedgewebview2|nvidia overlay|steamwebhelper|gamebar|gamebarftserver|widgets|rtkuwp)$/i;
+  function audioTargets(hmonitor) {
+    if (!isWin) return Promise.resolve({});
+    const ps = `
+$ErrorActionPreference='SilentlyContinue'
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Text;
+public class TFS {
+  [StructLayout(LayoutKind.Sequential)] public struct R { public int l, t, r, b; }
+  [StructLayout(LayoutKind.Sequential)] public struct MI { public int cb; public R m; public R w; public uint f; }
+  public delegate bool EP(IntPtr h, IntPtr p);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EP cb, IntPtr p);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out R r);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint f);
+  [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr m, ref MI i);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int a, out int v, int s);
+  public static string Find(long mon) {
+    var res = new StringBuilder();
+    EnumWindows((h, p) => {
+      if (!IsWindowVisible(h) || IsIconic(h)) return true;
+      int cloaked; if (DwmGetWindowAttribute(h, 14, out cloaked, 4) == 0 && cloaked != 0) return true;
+      IntPtr m = MonitorFromWindow(h, 0);
+      if (m == IntPtr.Zero || (mon != 0 && m.ToInt64() != mon)) return true;
+      MI i = new MI(); i.cb = Marshal.SizeOf(i); GetMonitorInfo(m, ref i);
+      R r; GetWindowRect(h, out r);
+      if (r.l <= i.m.l && r.t <= i.m.t && r.r >= i.m.r && r.b >= i.m.b) { uint pid; GetWindowThreadProcessId(h, out pid); res.Append(pid).Append(' '); }
+      return true;
+    }, IntPtr.Zero);
+    return res.ToString();
+  }
+}
+'@
+$game = $null
+foreach ($id in ([TFS]::Find(${Number(hmonitor) || 0}) -split ' ' | Where-Object { $_ })) {
+  $p = Get-Process -Id ([int]$id); if (-not $p) { continue }
+  if ($p.ProcessName -notmatch '${NOT_GAME.source.replace(/'/g, "''")}') { $game = @{ pid = $p.Id; name = $p.ProcessName }; break }
+}
+function MainPid($n) {
+  $all = @(Get-CimInstance Win32_Process -Filter "Name='$n'"); if (-not $all.Count) { return $null }
+  $ids = $all | ForEach-Object { $_.ProcessId }
+  $root = $all | Where-Object { $ids -notcontains $_.ParentProcessId } | Select-Object -First 1
+  if ($root) { return $root.ProcessId } else { return $all[0].ProcessId }
+}
+@{ game = $game; discord = (MainPid 'Discord.exe'); whatsapp = (MainPid 'WhatsApp.exe') } | ConvertTo-Json -Compress`;
+    return new Promise((resolve) => {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 15000 }, (err, out) => {
+        try { resolve(JSON.parse(String(out).trim().split(/\r?\n/).pop())); } catch { log('som automático: ' + (err ? err.message : out)); resolve({}); }
       });
     });
   }
@@ -269,10 +358,17 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
   }
 
   /* ---------- montar o pipeline ---------- */
-  function buildPipeline({ source, audio, audioPid, quality, encoder, endpoint, token }) {
+  function buildPipeline({ source, audio, audioPid, audioExcludePid, quality, encoder, endpoint, token, codec = 'h264', av1Variant = 'full', kbpsScale = 1 }) {
     const Q = QUALITY[quality] || QUALITY['1080p60'];
     const enc = ENCODERS.find((e) => e.id === encoder.id);
-    const encStr = enc[encoder.variant || 'full'](Q.kbps, Q.fps); // quadro-chave a cada 1 s (recupera rápido de engasgos)
+    const kbps = Math.round(Q.kbps * kbpsScale);
+    const isAv1 = codec === 'av1' && AV1_ENCODERS[encoder.id];
+    // quadro-chave a cada 1 s (recupera rápido de engasgos)
+    const encStr = isAv1 ? AV1_ENCODERS[encoder.id][av1Variant](kbps, Q.fps) : enc[encoder.variant || 'full'](kbps, Q.fps);
+    const pay = isAv1
+      ? ['! av1parse', '! rtpav1pay pt=96', '! application/x-rtp,media=video,encoding-name=AV1,payload=96,clock-rate=90000']
+      : ['! h264parse config-interval=-1', '! rtph264pay pt=96 config-interval=-1 aggregate-mode=zero-latency',
+         '! application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000'];
 
     const src = source.kind === 'window'
       ? `d3d11screencapturesrc window-handle=${source.hwnd} capture-api=wgc window-capture-mode=client show-cursor=true show-border=false`
@@ -291,9 +387,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
       `! ${toEncoder}`,
       `! ${encStr}`,
       '! identity name=encmeter silent=false',
-      '! h264parse config-interval=-1',
-      '! rtph264pay pt=96 config-interval=-1 aggregate-mode=zero-latency',
-      '! application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000',
+      ...pay,
       '! queue ! whip.sink_0',
     ].join(' ');
 
@@ -308,7 +402,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     if (audio !== 'none') {
       const mode = audioPid
         ? `loopback-mode=include-process-tree loopback-target-pid=${audioPid}`
-        : audio === 'pc' ? `loopback-mode=exclude-process-tree loopback-target-pid=${process.pid}` : '';
+        : audio === 'pc' ? `loopback-mode=exclude-process-tree loopback-target-pid=${audioExcludePid || process.pid}` : '';
       audioPart = [
         `wasapi2src loopback=true low-latency=true ${mode}`,
         '! queue max-size-time=200000000 leaky=downstream',
@@ -350,21 +444,38 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
       || list.find((s) => s.kind === 'screen');
     if (!source) { setState({ state: 'erro', detail: 'Não achei nenhuma tela para capturar.' }); return { ok: false, error: state.detail }; }
 
-    // som: 'auto' = só o app da janela (ou PC todo se for uma tela); 'app:<id>' = só o som daquele app
+    // som: 'auto' = janela -> só o app dela; tela -> só o jogo em tela cheia nela, senão o PC todo sem
+    // Discord/WhatsApp (a voz de vocês não volta como eco); 'app:<id>' = só aquele app; 'pc' = tudo
+    const hmonitor = source.kind === 'screen' ? await monitorHandle(source.displayId) : null;
     let audio = opts.audio || 'auto';
-    let audioPid = null;
-    if (audio === 'auto') audio = source.kind === 'window' ? 'app:' + source.id : 'pc';
+    let audioPid = null, audioExcludePid = null, audioLabel = null;
+    if (audio === 'auto' && source.kind === 'window') audio = 'app:' + source.id;
+    if (audio === 'auto') {
+      const t = await audioTargets(hmonitor);
+      if (t.game && t.game.pid) { audio = 'game'; audioPid = t.game.pid; audioLabel = `só o som de ${t.game.name}`; }
+      else {
+        audio = 'pc';
+        audioExcludePid = t.discord || t.whatsapp || null;
+        audioLabel = t.discord ? 'som do PC, sem o Discord' : t.whatsapp ? 'som do PC, sem o WhatsApp' : 'som do PC';
+      }
+      log(`som automático: ${audioLabel}`);
+    }
     if (audio.startsWith('app:')) {
       const target = list.find((s) => s.id === audio.slice(4)) || (source.kind === 'window' ? source : null);
       audioPid = target ? await pidOfWindow(target.hwnd) : null;
-      if (!audioPid) audio = 'pc';
+      audioLabel = target ? `só o som de ${target.name}` : null;
+      if (!audioPid) { audio = 'pc'; audioLabel = 'som do PC'; }
     }
 
-    const hmonitor = source.kind === 'screen' ? await monitorHandle(source.displayId) : null;
     current = {
       sourceId: source.id, sourceName: source.name, kind: source.kind, hwnd: source.hwnd, index: source.index, hmonitor,
-      audio, audioPid, quality: opts.quality || '1080p60', encoder, encoderLabel: encoder.label,
+      audio, audioPid, audioExcludePid, audioLabel, quality: opts.quality || '1080p60', encoder, encoderLabel: encoder.label,
+      codec: 'h264', kbpsScale: 1,
     };
+    // AV1 só entra quando todo mundo que está assistindo consegue abrir (o app de quem assiste avisa)
+    av1 = getCfg().codecPref === 'h264' ? { ok: false } : await detectAv1(encoder);
+    const vNow = (await fetchViewers().catch(() => [])).filter((v) => !v.self);
+    if (av1.ok && vNow.length && vNow.every((v) => v.av1)) current.codec = 'av1';
     setCfg({ lastStream: { kind: source.kind, sourceName: source.name, audio: opts.audio || 'auto', quality: current.quality } });
     resetAuto();
     auto.userQuality = current.quality;
@@ -377,9 +488,11 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
   async function launch(opts = {}) {
     const cfg = getCfg();
     const name = slug(cfg.name);
-    await ensurePath(name);
+    await ensurePath(name, current.codec);
     const pipeline = buildPipeline({
-      source: current, audio: current.audio, audioPid: current.audioPid, quality: current.quality, encoder: current.encoder,
+      source: current, audio: current.audio, audioPid: current.audioPid, audioExcludePid: current.audioExcludePid,
+      quality: current.quality, encoder: current.encoder,
+      codec: current.codec, av1Variant: av1.variant || 'full', kbpsScale: current.kbpsScale,
       endpoint: `http://${serverHost()}:${PORTS.webrtc}/${name}/whip`,
       token: `${ROOM_USER}:${cfg.password}`,
     });
@@ -388,6 +501,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     if (!opts.seamless) setState({ state: 'iniciando', detail: 'Conectando à sala…' });
 
     const p = spawn(bin('gst-launch-1.0'), ['-e', '-v', ...split(pipeline)], { env: env(), windowsHide: true });
+    let reachedLive = false; // esta tentativa chegou a ficar ao vivo?
     proc = p;
     boostPriority(p.pid);
     const meter = startMeter(p);
@@ -415,12 +529,20 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
 
       // Windows sem suporte a "som só de um app" (precisa Win 10 21H1+/Win 11): cai para o som do PC todo
       if (/wasapi2|loopback/i.test(err) && current.audioPid) {
-        current.audioPid = null; current.audio = 'pc';
+        current.audioPid = null; current.audio = 'pc'; current.audioLabel = 'som do PC';
         send('stream:notice', 'Seu Windows não deixa pegar o som de um app só — usando o som do PC todo.');
         return launch();
       }
       if (/wasapi2|loopback/i.test(err) && current.audio === 'pc') {
         current.audio = 'pc-simple';
+        return launch();
+      }
+      // AV1 falhou neste PC: desliga AV1 de vez e volta para H.264
+      if (current.codec === 'av1' && !reachedLive && /av1|property|enum|no element|could not link|not-negotiated|encoder/i.test(err)) {
+        if (av1.variant === 'full') { av1 = { ...av1, variant: 'min' }; return launch(); }
+        av1 = { ok: false }; setCfg({ av1: { ok: false, enc: current.encoder.id, gst: GST_VER } });
+        current.codec = 'h264';
+        log('AV1 falhou, voltando para H.264');
         return launch();
       }
       // driver recusou algum ajuste fino do codificador: tenta a versão mínima
@@ -447,8 +569,10 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
       const r = await apiFetch(`/v3/paths/get/${encodeURIComponent(name)}`).catch(() => null);
       if (r && (r.online ?? r.ready)) {
         clearInterval(liveCheck);
+        reachedLive = true;
         retries = 0;
         setState({ state: 'ao-vivo' });
+        startViewerWatch();
       } else if (n === 25) {
         lastErrors.push('ERROR: o servidor não recebeu o vídeo em 25 s');
         setState({ state: 'iniciando', detail: 'Demorando para conectar… confira o endereço da sala.' });
@@ -505,20 +629,130 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     }, auto.backoffMs);
   }
 
-  // cria o caminho desta pessoa como "sempre disponível" (quem assiste continua conectado nas trocas)
-  async function ensurePath(name) {
+  // cria o caminho desta pessoa como "sempre disponível" (quem assiste continua conectado nas trocas de qualidade)
+  const pathTracks = (codec) => [{ codec: codec === 'av1' ? 'AV1' : 'H264' }, { codec: 'Opus' }];
+  async function apiJson(apiPath, method = 'GET', body) {
+    const r = await fetch(`http://${serverHost()}:${PORTS.api}${apiPath}`, {
+      method,
+      headers: {
+        Authorization: 'Basic ' + Buffer.from(`${ROOM_USER}:${getCfg().password}`).toString('base64'),
+        'Content-Type': 'application/json',
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(4000),
+    });
+    const t = await r.text();
+    let j = null; try { j = JSON.parse(t); } catch {}
+    return { status: r.status, ok: r.ok, json: j };
+  }
+  async function ensurePath(name, codec = 'h264') {
+    const want = pathTracks(codec);
     try {
-      const r = await fetch(`http://${serverHost()}:${PORTS.api}/v3/config/paths/add/${encodeURIComponent(name)}`, {
-        method: 'POST',
-        headers: {
-          Authorization: 'Basic ' + Buffer.from(`${ROOM_USER}:${getCfg().password}`).toString('base64'),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ alwaysAvailable: true, alwaysAvailableTracks: [{ codec: 'H264' }, { codec: 'Opus' }] }),
-        signal: AbortSignal.timeout(4000),
-      });
-      if (!r.ok && r.status !== 400) log(`caminho sempre disponível: servidor respondeu ${r.status}`);
+      const add = await apiJson(`/v3/config/paths/add/${encodeURIComponent(name)}`, 'POST', { alwaysAvailable: true, alwaysAvailableTracks: want });
+      if (add.ok) return;
+      // já existe: só mexe se o formato mudou (mexer derruba quem assiste por 1-2 s, então evita)
+      const cur = await apiJson(`/v3/config/paths/get/${encodeURIComponent(name)}`);
+      const have = (cur.json?.alwaysAvailableTracks || []).map((t) => t.codec).join(',');
+      if (have !== want.map((t) => t.codec).join(',')) {
+        const r = await apiJson(`/v3/config/paths/patch/${encodeURIComponent(name)}`, 'PATCH', { alwaysAvailable: true, alwaysAvailableTracks: want });
+        log(`caminho: formato ${have || '?'} -> ${want[0].codec} (${r.status})`);
+      }
     } catch (e) { log('caminho sempre disponível: ' + e.message); }
+  }
+
+  /* ---------- quem está assistindo ----------
+   * O servidor lista as conexões de quem assiste; o app de quem assiste se identifica no endereço
+   * (?tv=1&n=Nome&av1=1) e manda a cada 3 s como está chegando (perda, travadas) para a sala.
+   */
+  async function fetchViewers() {
+    const name = slug(getCfg().name);
+    const [sess, fb] = await Promise.all([
+      apiJson('/v3/webrtcsessions/list?itemsPerPage=200'),
+      apiJson(`/telao/fb?path=${encodeURIComponent(name)}`).catch(() => ({ json: null })),
+    ]);
+    const reports = (fb.json && fb.json.items) || [];
+    return ((sess.json && sess.json.items) || [])
+      .filter((x) => x.state === 'read' && x.path === name)
+      .map((x) => {
+        const qs = new URLSearchParams(x.query || '');
+        const known = qs.get('tv') === '1';
+        const who = qs.get('n') || 'Alguém';
+        const rep = reports.find((r) => r.viewer === who) || null;
+        return {
+          id: x.id, name: who, known,
+          // app antigo (sem ?tv=1) não diz se abre AV1: conta como "não abre"
+          av1: known && (rep && typeof rep.av1 === 'boolean' ? rep.av1 : qs.get('av1') === '1'),
+          verdict: rep ? rep.verdict : null, loss: rep ? rep.loss : null, fps: rep ? rep.fps : null,
+          self: who === getCfg().name,
+        };
+      });
+  }
+
+  const watch = { timer: null, wantAv1: 0, bad: 0, good: 0, lastChange: 0, lastKey: '' };
+  function stopViewerWatch() { clearInterval(watch.timer); watch.timer = null; send('stream:viewers', []); }
+  function startViewerWatch() {
+    if (watch.timer) return;
+    Object.assign(watch, { wantAv1: 0, bad: 0, good: 0, lastChange: Date.now(), lastKey: '' });
+    watch.timer = setInterval(async () => {
+      if (!wantLive || !proc || !current) return;
+      let viewers;
+      try { viewers = await fetchViewers(); } catch { return; }
+      send('stream:viewers', viewers.map((v) => ({ name: v.name, verdict: v.verdict, loss: v.loss, fps: v.fps, known: v.known, self: v.self })));
+      const others = viewers.filter((v) => !v.self);
+      const now = Date.now();
+      const settled = now - watch.lastChange > 15000; // espera a última troca assentar
+
+      // 1) formato: AV1 quando todos abrem, H.264 assim que entra alguém que não abre
+      if (av1.ok && getCfg().codecPref !== 'h264') {
+        const allAv1 = others.length > 0 && others.every((v) => v.av1);
+        if (current.codec === 'h264' && allAv1) {
+          if (++watch.wantAv1 >= 4 && settled) { watch.wantAv1 = 0; return switchCodec('av1'); }
+        } else watch.wantAv1 = 0;
+        if (current.codec === 'av1' && others.some((v) => !v.av1)) return switchCodec('h264');
+      }
+
+      // 2) internet de quem assiste: alguém perdendo pacotes -> baixa a taxa; tudo liso por 2 min -> sobe
+      if (getCfg().autoFps === false) return;
+      const bad = others.some((v) => v.verdict === 'rede');
+      if (bad) { watch.bad++; watch.good = 0; } else if (others.some((v) => v.verdict === 'ok')) { watch.good++; watch.bad = 0; }
+      if (watch.bad >= 3 && settled && current.kbpsScale > 0.5) {
+        watch.bad = 0;
+        const next = Math.max(0.5, Math.round(current.kbpsScale * 0.75 * 100) / 100);
+        if (switchBitrate(next)) send('stream:notice', `A internet de quem assiste está perdendo pacotes: baixei a taxa para ${Math.round(next * 100)}% para não travar.`);
+      } else if (watch.good >= 40 && settled && current.kbpsScale < 1) { // 40 × 3 s = 2 min
+        watch.good = 0;
+        const next = Math.min(1, Math.round((current.kbpsScale / 0.75) * 100) / 100);
+        if (switchBitrate(next) && next === 1) send('stream:notice', 'A internet de quem assiste estabilizou: taxa de volta ao normal.');
+      }
+    }, 3000);
+  }
+
+  // troca de taxa: igual à troca de qualidade (sem derrubar ninguém)
+  function switchBitrate(scale) {
+    if (!proc || !wantLive) return false;
+    const old = proc;
+    current.kbpsScale = scale;
+    watch.lastChange = Date.now();
+    log(`taxa -> ${Math.round(scale * 100)}%`);
+    launch({ seamless: true });
+    setTimeout(() => { try { old.kill(); } catch {} }, 8000);
+    return true;
+  }
+
+  // troca de formato (H.264 <-> AV1): quem assiste reconecta sozinho em 1-2 s
+  async function switchCodec(codec) {
+    if (!proc || !wantLive || current.codec === codec) return;
+    const old = proc;
+    current.codec = codec;
+    watch.lastChange = Date.now();
+    log(`formato -> ${codec}`);
+    proc = null; // a saída do antigo não conta como queda
+    try { old.kill(); } catch {}
+    await launch({ seamless: true });
+    send('stream:notice', codec === 'av1'
+      ? 'Todo mundo que está assistindo abre AV1: mudei para AV1 (imagem mais nítida com a mesma internet).'
+      : 'Entrou alguém que não abre AV1: voltei para H.264 para ficar liso para todos.');
+    setState({ state: state.state, codec });
   }
 
   // pede para o servidor derrubar a sessão na hora (senão ela some só depois de alguns segundos)
@@ -535,6 +769,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
   async function stop(silent = false) {
     wantLive = false;
     resetAuto();
+    stopViewerWatch();
     clearInterval(liveCheck);
     const p = proc;
     proc = null;
