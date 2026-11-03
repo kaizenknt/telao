@@ -34,6 +34,7 @@ case "$(uname -m)" in
 esac
 curl -fsSL "https://github.com/bluenviron/mediamtx/releases/download/${MTX_VER}/mediamtx_${MTX_VER}_linux_${ARCH}.tar.gz" | tar xz -C "$DIR" mediamtx
 curl -fsSL "$REPO_RAW/src/roomproxy.js" -o "$DIR/roomproxy.js"
+curl -fsSL "$REPO_RAW/src/invite.js" -o "$DIR/invite.js"
 
 IP="$(curl -fsS https://api.ipify.org || curl -fsS https://ifconfig.me/ip)"
 [ -n "$IP" ] || { echo "Não consegui descobrir o IP público do servidor."; exit 1; }
@@ -111,7 +112,7 @@ if command -v ufw >/dev/null && ufw status | grep -q active; then
 fi
 
 sleep 2
-CODE="TELAO-$(node -e 'process.stdout.write(Buffer.from(JSON.stringify({h:process.argv[1],p:process.argv[2]})).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""))' "$IP" "$SENHA")"
+CODE="$(node "$DIR/invite.js" "$IP" "$SENHA")"
 echo
 echo "================================================================"
 echo " Sala pronta no servidor $IP"

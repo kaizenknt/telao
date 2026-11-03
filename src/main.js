@@ -24,6 +24,7 @@ const createEngine = require('./engine');
 const sys = require('./system');
 const { createUpnp } = require('./upnp');
 const { createRoomProxy } = require('./roomproxy');
+const invites = require('./invite');
 
 const PORTS = { webrtc: 8889, ice: 8189, api: 9997, apiInner: 9996 }; // 9997 = porteiro (roomproxy), 9996 = API do MediaMTX só por dentro
 const ROOM_USER = 'sala';
@@ -224,17 +225,11 @@ async function publicIp() {
   return null;
 }
 
-function makeInvite(host) {
-  const payload = Buffer.from(JSON.stringify({ h: host, p: cfg.password })).toString('base64url');
-  return 'TELAO-' + payload;
-}
+// convite curto e ilegível (src/invite.js); os antigos TELAO-<base64> continuam valendo
+function makeInvite(host) { return invites.makeInvite(host, cfg.password); }
 function readInvite(code) {
-  const m = String(code || '').trim().match(/^TELAO-([A-Za-z0-9_-]+)$/);
-  if (!m) return null;
-  try {
-    const o = JSON.parse(Buffer.from(m[1], 'base64url').toString());
-    return o.h && o.p ? { server: cleanHost(o.h), password: String(o.p) } : null;
-  } catch { return null; }
+  const r = invites.readInvite(code);
+  return r ? { server: cleanHost(r.host), password: r.password } : null;
 }
 
 /* ---------------- Lista de transmissões ---------------- */
@@ -295,7 +290,7 @@ function registerIpc() {
     updateTray();
     return { ...cfg, path: slug(cfg.name), ports: PORTS };
   });
-  ipcMain.handle('invite:read', (_e, code) => readInvite(String(code || '').trim().replace(/^.*#(TELAO-)/, '$1')));
+  ipcMain.handle('invite:read', (_e, code) => readInvite(code));
   ipcMain.handle('invite:pending', () => { const c = pendingInvite; pendingInvite = null; return c; });
   // quem assiste manda para a sala como está chegando (o porteiro da sala guarda; quem transmite lê)
   ipcMain.handle('rooms:feedback', async (_e, fb) => {
