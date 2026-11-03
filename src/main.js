@@ -15,7 +15,7 @@
     if (best) { require(_p.join(best, 'main.js')); return; }
   }
 }
-const { app, BrowserWindow, ipcMain, shell, clipboard, protocol, net, session, Tray, Menu, Notification, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, clipboard, protocol, net, session, Tray, Menu, Notification, nativeImage, screen, dialog } = require('electron');
 const { pathToFileURL } = require('url');
 const path = require('path');
 const fs = require('fs');
@@ -25,6 +25,7 @@ const sys = require('./system');
 const { createUpnp } = require('./upnp');
 const { createRoomProxy } = require('./roomproxy');
 const invites = require('./invite');
+const { createRoomEvents } = require('./roomevents');
 
 const PORTS = { webrtc: 8889, ice: 8189, api: 9997, apiInner: 9996 }; // 9997 = porteiro (roomproxy), 9996 = API do MediaMTX só por dentro
 const ROOM_USER = 'sala';
@@ -33,6 +34,7 @@ let win = null;
 let quitting = false;
 const send = (ch, data) => {
   if (win && !win.isDestroyed()) win.webContents.send(ch, data);
+  if (ch === 'stream:state') syncOverlay(data);
   if (ch === 'stream:state' || ch === 'host:state') updateTray();
   // janela fechada (modo leve): avisos importantes viram notificação do Windows
   if (!win && ch === 'stream:state' && data?.state === 'erro') notify('A transmissão parou', String(data.detail || '').split('\n')[0]);
@@ -48,7 +50,10 @@ const DEFAULTS = {
   preferVpn: null,
   autoFps: true,
   codecPref: 'auto', // 'auto' = AV1 quando todos que assistem abrem; 'h264' = sempre H.264
-  av1Bad: false,     // este PC já mostrou que não dá conta de abrir AV1 // troca sozinho para menos FPS/resolução quando o jogo ou o codificador não dá conta (igual o Discord) // VPN que o host escolheu por último para os convites (ex.: "Hamachi")
+  av1Bad: false,
+  privateCapture: true, // com jogo em tela cheia, transmite só a janela do jogo (notificações não vazam)
+  clips: true,          // quem assiste pode salvar o último meio minuto
+  marksOverlay: true,   // mostrar na sua tela onde os amigos apontam/desenham     // este PC já mostrou que não dá conta de abrir AV1 // troca sozinho para menos FPS/resolução quando o jogo ou o codificador não dá conta (igual o Discord) // VPN que o host escolheu por último para os convites (ex.: "Hamachi")
 };
 function loadCfg() {
   try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; }
@@ -243,10 +248,14 @@ async function listRooms() {
     if (r.status === 401) return { ok: false, error: 'Senha da sala incorreta.' };
     if (!r.ok) return { ok: false, error: `Servidor respondeu ${r.status}.` };
     const j = await r.json();
-    const items = (j.items || []).filter((p) => p.online ?? p.ready).map((p) => ({
+    const online = (j.items || []).filter((p) => p.online ?? p.ready);
+    const lights = new Map(online.filter((p) => p.name.endsWith('.leve')).map((p) => [p.name.slice(0, -5), p]));
+    // a versão leve (nome.leve) não aparece como transmissão: vira um detalhe da principal
+    const items = online.filter((p) => !p.name.endsWith('.leve')).map((p) => ({
       name: p.name,
       since: p.onlineTime || p.readyTime || null,
-      viewers: (p.readers || []).length,
+      viewers: (p.readers || []).length + ((lights.get(p.name)?.readers || []).length),
+      light: lights.has(p.name),
       bytes: p.inboundBytes ?? p.bytesReceived ?? 0,
       tracks: (p.tracks2 || p.tracks || []).map((t) => (typeof t === 'string' ? t : t.codec)),
     }));
@@ -286,11 +295,26 @@ function registerIpc() {
     if (wasHosting && (!cfg.hosting || cfg.password !== oldPass)) await stopHost();
     if (wasHosting && !cfg.hosting) { upnp.close().catch(() => {}); netState = { status: 'idle' }; send('net:state', netState); }
     if (cfg.hosting && !mtx) startHost();
+    if (patch.server !== undefined || patch.password !== undefined || patch.hosting !== undefined) roomEv.reset();
     applyLoginItem();
     updateTray();
     return { ...cfg, path: slug(cfg.name), ports: PORTS };
   });
   ipcMain.handle('invite:read', (_e, code) => readInvite(code));
+  ipcMain.handle('ev:sub', (_e, ch) => roomEv.sub(String(ch)));
+  ipcMain.handle('ev:unsub', (_e, ch) => roomEv.unsub(String(ch)));
+  ipcMain.handle('ev:send', (_e, ev) => roomEv.send({ ...ev, from: cfg.name }));
+  ipcMain.handle('ev:now', () => roomEv.serverNow());
+  // clipe de quem assiste: salva em Vídeos\Telão
+  ipcMain.handle('clip:save', async (_e, { data, ext, who }) => {
+    const dir = path.join(app.getPath('videos'), 'Telão');
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const file = path.join(dir, `clipe-${slug(who || 'telao')}-${stamp}.${ext === 'mp4' ? 'mp4' : 'webm'}`);
+    fs.writeFileSync(file, Buffer.from(data));
+    return file;
+  });
+  ipcMain.handle('clip:show', (_e, file) => shell.showItemInFolder(String(file)));
   ipcMain.handle('invite:pending', () => { const c = pendingInvite; pendingInvite = null; return c; });
   // quem assiste manda para a sala como está chegando (o porteiro da sala guarda; quem transmite lê)
   ipcMain.handle('rooms:feedback', async (_e, fb) => {
@@ -350,12 +374,52 @@ function registerIpc() {
   ipcMain.handle('upd:relaunch', () => { engine?.stop(true); stopHost(); updater.relaunch(); });
 
   ipcMain.handle('util:copy', (_e, t) => { clipboard.writeText(String(t)); return true; });
-  ipcMain.handle('util:open', (_e, url) => { if (/^https:\/\/github\.com\//.test(url)) shell.openExternal(url); });
+  ipcMain.handle('util:open', (_e, url) => { if (/^https:\/\/github\.com\//.test(url) || url === 'ms-settings:notifications' || url === 'ms-settings:quiethours') shell.openExternal(url); });
   ipcMain.handle('win:fullscreen', (_e, on) => { if (win) win.setFullScreen(!!on); return win?.isFullScreen(); });
 }
 
 /* ---------------- Janela ---------------- */
 const asset = (f) => path.join(__dirname, 'assets', f);
+
+/* ---------------- Eventos ao vivo da sala ---------------- */
+const roomEv = createRoomEvents({
+  baseUrl: () => `http://${serverHost()}:${PORTS.api}`,
+  authHeader: () => basicAuth(),
+  onEvent: (ev) => {
+    if (win && !win.isDestroyed()) win.webContents.send('ev:msg', ev);
+    if (overlay && !overlay.isDestroyed() && ev.ch === overlayCh) overlay.webContents.send('ov:ev', ev);
+  },
+  log: (m) => { mtxLog.push(m); if (mtxLog.length > 300) mtxLog.shift(); },
+});
+
+/* Janela transparente por cima da tela que você está transmitindo: mostra onde os amigos apontam/desenham.
+ * Fica fora da captura (proteção de conteúdo), então quem assiste não vê em dobro: cada um desenha no seu player. */
+let overlay = null, overlayCh = null;
+function syncOverlay(st) {
+  const live = st && st.state === 'ao-vivo';
+  if (live && !overlay && cfg.marksOverlay !== false) {
+    const src = engine && engine.currentSource ? engine.currentSource() : null;
+    const d = (src && src.displayId && screen.getAllDisplays().find((x) => String(x.id) === String(src.displayId))) || screen.getPrimaryDisplay();
+    overlay = new BrowserWindow({
+      x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height,
+      transparent: true, frame: false, focusable: false, skipTaskbar: true, resizable: false, movable: false,
+      hasShadow: false, show: false, backgroundColor: '#00000000',
+      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
+    });
+    overlay.setIgnoreMouseEvents(true);
+    overlay.setAlwaysOnTop(true, 'screen-saver');
+    overlay.setContentProtection(true);
+    overlay.loadURL('app://telao/overlay.html');
+    overlay.once('ready-to-show', () => overlay && overlay.showInactive());
+    overlay.on('closed', () => { overlay = null; });
+    overlayCh = 'p:' + slug(cfg.name);
+    roomEv.sub(overlayCh);
+  } else if (!live && st && ['parado', 'erro'].includes(st.state) && overlay) {
+    try { overlay.close(); } catch {}
+    overlay = null;
+    if (overlayCh) { roomEv.unsub(overlayCh); overlayCh = null; }
+  }
+}
 
 function createWindow() {
   win = new BrowserWindow({

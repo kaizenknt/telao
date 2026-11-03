@@ -101,6 +101,8 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
   let lastErrors = [];
   let liveCheck = null;
   let av1 = { ok: false };
+  let privacyFailed = false; // captura da janela do jogo não deu imagem neste PC: usa a tela inteira
+  let lightBroken = false; // a camada leve falhou neste PC: não tenta mais nesta sessão
   // ajuste automático (como o Discord): qualidade que a pessoa escolheu x a que está rodando agora
   const auto = { userQuality: null, upTimer: null, backoffMs: 5 * 60 * 1000, probing: false, probeOkTimer: null };
   function resetAuto() {
@@ -110,7 +112,8 @@ module.exports = function createEngine({ getCfg, setCfg, send, slug, serverHost,
 
   function setState(s) {
     state = { ...s, source: current?.sourceName, quality: current && QUALITY[current.quality]?.label, encoder: current?.encoderLabel,
-      codec: current?.codec === 'av1' ? 'AV1' : 'H.264', audioLabel: current?.audioLabel || null, kbpsScale: current?.kbpsScale ?? 1 };
+      codec: current?.codec === 'av1' ? 'AV1' : 'H.264', audioLabel: current?.audioLabel || null, light: !!current?.light,
+      privateGame: current?.gameName || null, wholeScreen: !!current && current.kind === 'screen' && !current.captureHwnd, kbpsScale: current?.kbpsScale ?? 1 };
     send('stream:state', state);
   }
 
@@ -254,7 +257,7 @@ public class TFS {
       if (m == IntPtr.Zero || (mon != 0 && m.ToInt64() != mon)) return true;
       MI i = new MI(); i.cb = Marshal.SizeOf(i); GetMonitorInfo(m, ref i);
       R r; GetWindowRect(h, out r);
-      if (r.l <= i.m.l && r.t <= i.m.t && r.r >= i.m.r && r.b >= i.m.b) { uint pid; GetWindowThreadProcessId(h, out pid); res.Append(pid).Append(' '); }
+      if (r.l <= i.m.l && r.t <= i.m.t && r.r >= i.m.r && r.b >= i.m.b) { uint pid; GetWindowThreadProcessId(h, out pid); res.Append(pid).Append(':').Append(h.ToInt64()).Append(' '); }
       return true;
     }, IntPtr.Zero);
     return res.ToString();
@@ -262,9 +265,10 @@ public class TFS {
 }
 '@
 $game = $null
-foreach ($id in ([TFS]::Find(${Number(hmonitor) || 0}) -split ' ' | Where-Object { $_ })) {
+foreach ($it in ([TFS]::Find(${Number(hmonitor) || 0}) -split ' ' | Where-Object { $_ })) {
+  $id, $hw = $it -split ':'
   $p = Get-Process -Id ([int]$id); if (-not $p) { continue }
-  if ($p.ProcessName -notmatch '${NOT_GAME.source.replace(/'/g, "''")}') { $game = @{ pid = $p.Id; name = $p.ProcessName }; break }
+  if ($p.ProcessName -notmatch '${NOT_GAME.source.replace(/'/g, "''")}') { $game = @{ pid = $p.Id; name = $p.ProcessName; hwnd = [int64]$hw }; break }
 }
 function MainPid($n) {
   $all = @(Get-CimInstance Win32_Process -Filter "Name='$n'"); if (-not $all.Count) { return $null }
@@ -301,7 +305,7 @@ function MainPid($n) {
    * Igual o Discord, quando isso acontece por vários segundos a gente sugere 30 FPS, que fica liso.
    */
   function startMeter(p) {
-    let cap = 0, enc = 0;
+    let cap = 0, enc = 0, total = 0;
     const hist = [];
     let suggested = false;
     let warmup = 5; // ignora os primeiros segundos (o codificador ainda está aquecendo)
@@ -331,8 +335,9 @@ function MainPid($n) {
       send('stream:fps', info);
     }, 1000);
     return {
+      get total() { return total; },
       feed(line) {
-        if (line.includes('capmeter: last-message')) { cap++; return true; }
+        if (line.includes('capmeter: last-message')) { cap++; total++; return true; }
         if (line.includes('encmeter: last-message')) { enc++; return true; }
         return /last-message =/.test(line); // outras notificações do -v não interessam
       },
@@ -358,7 +363,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
   }
 
   /* ---------- montar o pipeline ---------- */
-  function buildPipeline({ source, audio, audioPid, audioExcludePid, quality, encoder, endpoint, token, codec = 'h264', av1Variant = 'full', kbpsScale = 1 }) {
+  function buildPipeline({ source, audio, audioPid, audioExcludePid, quality, encoder, endpoint, token, codec = 'h264', av1Variant = 'full', kbpsScale = 1, light = false }) {
     const Q = QUALITY[quality] || QUALITY['1080p60'];
     const enc = ENCODERS.find((e) => e.id === encoder.id);
     const kbps = Math.round(Q.kbps * kbpsScale);
@@ -370,7 +375,9 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
       : ['! h264parse config-interval=-1', '! rtph264pay pt=96 config-interval=-1 aggregate-mode=zero-latency',
          '! application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000'];
 
-    const src = source.kind === 'window'
+    const src = source.captureHwnd
+      ? `d3d11screencapturesrc window-handle=${source.captureHwnd} capture-api=wgc window-capture-mode=client show-cursor=true show-border=false`
+      : source.kind === 'window'
       ? `d3d11screencapturesrc window-handle=${source.hwnd} capture-api=wgc window-capture-mode=client show-cursor=true show-border=false`
       : source.hmonitor
         ? `d3d11screencapturesrc monitor-handle=${source.hmonitor} show-cursor=true`
@@ -380,42 +387,46 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
       ? `d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12,width=${Q.w},height=${Q.h}`
       : `d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12,width=${Q.w},height=${Q.h} ! d3d11download ! video/x-raw,format=NV12`;
 
-    const video = [
-      src, `! video/x-raw(memory:D3D11Memory),framerate=${Q.fps}/1`,
-      '! identity name=capmeter silent=false',
-      '! queue max-size-buffers=3 leaky=downstream',
-      `! ${toEncoder}`,
-      `! ${encStr}`,
-      '! identity name=encmeter silent=false',
-      ...pay,
-      '! queue ! whip.sink_0',
-    ].join(' ');
+    // camada leve (720p, H.264, taxa baixa): só existe enquanto alguém com internet fraca precisa dela.
+    // A mesma captura alimenta os dois codificadores (o chip de vídeo da placa dá conta de vários de uma vez).
+    const LQ = { w: 1280, h: 720, kbps: Q.fps >= 60 ? 3000 : 2200 };
+    const lightEnc = light ? enc[encoder.variant || 'full'](LQ.kbps, Q.fps) : null;
+    const toLight = enc.gpu
+      ? `d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12,width=${LQ.w},height=${LQ.h}`
+      : `d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12,width=${LQ.w},height=${LQ.h} ! d3d11download ! video/x-raw,format=NV12`;
+    const h264pay = ['! h264parse config-interval=-1', '! rtph264pay pt=96 config-interval=-1 aggregate-mode=zero-latency',
+      '! application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000'];
 
-    let audioPart = [
-      'audiotestsrc wave=silence is-live=true',
-      '! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2',
-      '! opusenc bitrate=16000 frame-size=20',
-      '! rtpopuspay pt=97',
-      '! application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000',
-      '! queue ! whip.sink_1',
-    ].join(' ');
+    const head = [src, `! video/x-raw(memory:D3D11Memory),framerate=${Q.fps}/1`, '! identity name=capmeter silent=false'];
+    const mainBranch = [`! ${toEncoder}`, `! ${encStr}`, '! identity name=encmeter silent=false', ...pay, '! queue ! whip.sink_0'];
+    const video = light
+      ? [...head, '! tee name=vt',
+          'vt. ! queue max-size-buffers=3 leaky=downstream', ...mainBranch,
+          'vt. ! queue max-size-buffers=2 leaky=downstream', `! ${toLight}`, `! ${lightEnc}`, ...h264pay, '! queue ! whipl.sink_0'].join(' ')
+      : [...head, '! queue max-size-buffers=3 leaky=downstream', ...mainBranch].join(' ');
+
+    // som: a mesma fonte vai para as duas versões (cada uma com seu Opus)
+    const opus = (rate, frame, sinkPad) => [`! queue ! opusenc bitrate=${rate} frame-size=${frame}`, '! rtpopuspay pt=97',
+      '! application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000', `! queue ! ${sinkPad}`].join(' ');
+    let audioSrc, rate = 128000, frame = 10;
     if (audio !== 'none') {
       const mode = audioPid
         ? `loopback-mode=include-process-tree loopback-target-pid=${audioPid}`
         : audio === 'pc' ? `loopback-mode=exclude-process-tree loopback-target-pid=${audioExcludePid || process.pid}` : '';
-      audioPart = [
-        `wasapi2src loopback=true low-latency=true ${mode}`,
-        '! queue max-size-time=200000000 leaky=downstream',
-        '! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2',
-        '! opusenc bitrate=128000 frame-size=10',
-        '! rtpopuspay pt=97',
-        '! application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000',
-        '! queue ! whip.sink_1',
-      ].join(' ');
+      audioSrc = `wasapi2src loopback=true low-latency=true ${mode} ! queue max-size-time=200000000 leaky=downstream`;
+    } else {
+      // "Sem som": manda silêncio (a sala espera vídeo + áudio por causa das trocas sem queda)
+      audioSrc = 'audiotestsrc wave=silence is-live=true'; rate = 16000; frame = 20;
     }
+    const audioHead = `${audioSrc} ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2`;
+    const audioPart = light
+      ? `${audioHead} ! tee name=at at. ${opus(rate, frame, 'whip.sink_1')} at. ${opus(Math.min(rate, 96000), frame, 'whipl.sink_1')}`
+      : `${audioHead} ${opus(rate, frame, 'whip.sink_1')}`;
 
-    const sink = `whipsink name=whip whip-endpoint=${q(endpoint)} auth-token=${q(token)} stun-server=${q('stun://stun.l.google.com:19302')}`;
-    return [sink, video, audioPart].filter(Boolean).join(' ');
+    const stun = q('stun://stun.l.google.com:19302');
+    const sink = `whipsink name=whip whip-endpoint=${q(endpoint)} auth-token=${q(token)} stun-server=${stun}`;
+    const sinkLight = light ? `whipsink name=whipl whip-endpoint=${q(endpoint.replace(/\/whip$/, '.leve/whip'))} auth-token=${q(token)} stun-server=${stun}` : '';
+    return [sink, sinkLight, video, audioPart].filter(Boolean).join(' ');
   }
 
   /* ---------- iniciar / parar ---------- */
@@ -450,8 +461,12 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     let audio = opts.audio || 'auto';
     let audioPid = null, audioExcludePid = null, audioLabel = null;
     if (audio === 'auto' && source.kind === 'window') audio = 'app:' + source.id;
+    // tela com jogo em tela cheia: procura o jogo (para o som e para o modo privado)
+    const t = source.kind === 'screen' && (audio === 'auto' || getCfg().privateCapture !== false) ? await audioTargets(hmonitor) : {};
+    // modo privado: captura só a janela do jogo -> notificações e outras janelas nunca aparecem
+    const captureHwnd = t.game && t.game.hwnd && getCfg().privateCapture !== false && !privacyFailed ? t.game.hwnd : null;
+    if (captureHwnd) log(`modo privado: capturando só a janela de ${t.game.name}`);
     if (audio === 'auto') {
-      const t = await audioTargets(hmonitor);
       if (t.game && t.game.pid) { audio = 'game'; audioPid = t.game.pid; audioLabel = `só o som de ${t.game.name}`; }
       else {
         audio = 'pc';
@@ -468,9 +483,10 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     }
 
     current = {
-      sourceId: source.id, sourceName: source.name, kind: source.kind, hwnd: source.hwnd, index: source.index, hmonitor,
+      sourceId: source.id, sourceName: source.name, kind: source.kind, hwnd: source.hwnd, index: source.index, hmonitor, displayId: source.displayId,
+      captureHwnd, gameName: captureHwnd ? t.game.name : null,
       audio, audioPid, audioExcludePid, audioLabel, quality: opts.quality || '1080p60', encoder, encoderLabel: encoder.label,
-      codec: 'h264', kbpsScale: 1,
+      codec: 'h264', kbpsScale: 1, light: false,
     };
     // AV1 só entra quando todo mundo que está assistindo consegue abrir (o app de quem assiste avisa)
     av1 = getCfg().codecPref === 'h264' ? { ok: false } : await detectAv1(encoder);
@@ -492,7 +508,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     const pipeline = buildPipeline({
       source: current, audio: current.audio, audioPid: current.audioPid, audioExcludePid: current.audioExcludePid,
       quality: current.quality, encoder: current.encoder,
-      codec: current.codec, av1Variant: av1.variant || 'full', kbpsScale: current.kbpsScale,
+      codec: current.codec, av1Variant: av1.variant || 'full', kbpsScale: current.kbpsScale, light: !!current.light && !lightBroken,
       endpoint: `http://${serverHost()}:${PORTS.webrtc}/${name}/whip`,
       token: `${ROOM_USER}:${cfg.password}`,
     });
@@ -505,6 +521,14 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     proc = p;
     boostPriority(p.pid);
     const meter = startMeter(p);
+    // modo privado sem imagem (alguns jogos não deixam capturar a janela): volta para a tela inteira
+    if (current.captureHwnd) setTimeout(() => {
+      if (p !== proc || meter.total > 0 || !current.captureHwnd) return;
+      log('modo privado: a janela do jogo não deu imagem; usando a tela inteira');
+      privacyFailed = true; current.captureHwnd = null; current.gameName = null;
+      send('stream:notice', 'Este jogo não deixa capturar só a janela dele: transmitindo a tela inteira.');
+      const old = proc; launch({ seamless: true }); setTimeout(() => { try { old.kill(); } catch {} }, 8000);
+    }, 9000);
     let partial = '';
     const onData = (d) => {
       const lines = (partial + String(d)).split(/\r?\n/);
@@ -535,6 +559,18 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
       }
       if (/wasapi2|loopback/i.test(err) && current.audio === 'pc') {
         current.audio = 'pc-simple';
+        return launch();
+      }
+      // captura só da janela do jogo falhou: usa a tela inteira
+      if (current.captureHwnd && !reachedLive && /window|wgc|capture|d3d11screencapture/i.test(err)) {
+        privacyFailed = true; current.captureHwnd = null; current.gameName = null;
+        send('stream:notice', 'Este jogo não deixa capturar só a janela dele: transmitindo a tela inteira.');
+        return launch();
+      }
+      // a camada leve (segundo codificador) derrubou o motor: segue só com a principal
+      if (current.light && !reachedLive && /whipl|tee|vt|could not link|not-negotiated|encoder|session/i.test(err)) {
+        lightBroken = true; current.light = false;
+        log('camada leve falhou neste PC; seguindo só com a principal');
         return launch();
       }
       // AV1 falhou neste PC: desliga AV1 de vez e volta para H.264
@@ -672,7 +708,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
     ]);
     const reports = (fb.json && fb.json.items) || [];
     return ((sess.json && sess.json.items) || [])
-      .filter((x) => x.state === 'read' && x.path === name)
+      .filter((x) => x.state === 'read' && (x.path === name || x.path === name + '.leve'))
       .map((x) => {
         const qs = new URLSearchParams(x.query || '');
         const known = qs.get('tv') === '1';
@@ -683,6 +719,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
           // app antigo (sem ?tv=1) não diz se abre AV1: conta como "não abre"
           av1: known && (rep && typeof rep.av1 === 'boolean' ? rep.av1 : qs.get('av1') === '1'),
           verdict: rep ? rep.verdict : null, loss: rep ? rep.loss : null, fps: rep ? rep.fps : null,
+          layer: x.path === name + '.leve' ? 'leve' : 'main', wantsLight: !!(rep && rep.wantsLight),
           self: who === getCfg().name,
         };
       });
@@ -697,7 +734,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
       if (!wantLive || !proc || !current) return;
       let viewers;
       try { viewers = await fetchViewers(); } catch { return; }
-      send('stream:viewers', viewers.map((v) => ({ name: v.name, verdict: v.verdict, loss: v.loss, fps: v.fps, known: v.known, self: v.self })));
+      send('stream:viewers', viewers.map((v) => ({ name: v.name, verdict: v.verdict, loss: v.loss, fps: v.fps, known: v.known, self: v.self, layer: v.layer })));
       const others = viewers.filter((v) => !v.self);
       const now = Date.now();
       const settled = now - watch.lastChange > 15000; // espera a última troca assentar
@@ -711,20 +748,42 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
         if (current.codec === 'av1' && others.some((v) => !v.av1)) return switchCodec('h264');
       }
 
-      // 2) internet de quem assiste: alguém perdendo pacotes -> baixa a taxa; tudo liso por 2 min -> sobe
       if (getCfg().autoFps === false) return;
-      const bad = others.some((v) => v.verdict === 'rede');
-      if (bad) { watch.bad++; watch.good = 0; } else if (others.some((v) => v.verdict === 'ok')) { watch.good++; watch.bad = 0; }
-      if (watch.bad >= 3 && settled && current.kbpsScale > 0.5) {
+      // 2) qualidade por pessoa: quem está com a internet ruim pede a versão leve (720p) e passa para ela;
+      //    os outros continuam na máxima. Sem ninguém precisando por 2 min, a versão leve é desligada.
+      const needLight = others.some((v) => v.wantsLight || v.layer === 'leve');
+      if (needLight) watch.noLight = 0; else watch.noLight = (watch.noLight || 0) + 1;
+      if (needLight && !current.light && !lightBroken && settled) return switchLight(true);
+      if (!needLight && current.light && watch.noLight >= 40 && settled) return switchLight(false);
+
+      // 3) todo mundo ruim (até quem já está na leve) = problema na SUA internet de envio -> baixa a taxa de tudo
+      const allBad = others.length > 0 && others.every((v) => v.verdict === 'rede');
+      if (allBad && (current.light || lightBroken || others.length === 1)) { watch.bad++; watch.good = 0; }
+      else if (others.some((v) => v.verdict === 'ok')) { watch.good++; watch.bad = 0; }
+      if (watch.bad >= 4 && settled && current.kbpsScale > 0.5) {
         watch.bad = 0;
         const next = Math.max(0.5, Math.round(current.kbpsScale * 0.75 * 100) / 100);
-        if (switchBitrate(next)) send('stream:notice', `A internet de quem assiste está perdendo pacotes: baixei a taxa para ${Math.round(next * 100)}% para não travar.`);
+        if (switchBitrate(next)) send('stream:notice', `Todo mundo está perdendo pacotes (deve ser a sua internet de envio): baixei a taxa para ${Math.round(next * 100)}%.`);
       } else if (watch.good >= 40 && settled && current.kbpsScale < 1) { // 40 × 3 s = 2 min
         watch.good = 0;
         const next = Math.min(1, Math.round((current.kbpsScale / 0.75) * 100) / 100);
-        if (switchBitrate(next) && next === 1) send('stream:notice', 'A internet de quem assiste estabilizou: taxa de volta ao normal.');
+        if (switchBitrate(next) && next === 1) send('stream:notice', 'Envio estabilizou: taxa de volta ao normal.');
       }
     }, 3000);
+  }
+
+  // liga/desliga a versão leve (sem derrubar quem está na principal)
+  function switchLight(on) {
+    if (!proc || !wantLive || !!current.light === on) return false;
+    const old = proc;
+    current.light = on;
+    watch.lastChange = Date.now();
+    log(`camada leve -> ${on ? 'ligada' : 'desligada'}`);
+    launch({ seamless: true });
+    setTimeout(() => { try { old.kill(); } catch {} }, 8000);
+    if (on) send('stream:notice', 'Alguém está com a internet fraca: liguei uma versão leve (720p) só para essa pessoa. Os outros continuam na máxima.');
+    setState({ state: state.state });
+    return true;
   }
 
   // troca de taxa: igual à troca de qualidade (sem derrubar ninguém)
@@ -838,6 +897,7 @@ $gpu = [T.G]::D3DKMTSetProcessSchedulingPriorityClass($p.Handle, 4);
   return {
     QUALITY, sources, start, stop, diagnose, detectEncoder,
     state: () => state, isLive: () => wantLive || state.state === 'ao-vivo',
+    currentSource: () => current,
     logPath, _internals: { split, buildPipeline },
   };
 };

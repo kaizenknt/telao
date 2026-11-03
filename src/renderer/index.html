@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; connect-src 'self' http: https:; media-src 'self' blob: mediastream:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+        content="default-src 'self'; connect-src 'self' http: https:; media-src 'self' blob: mediastream: https: http:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src https://kaizenknt.github.io" />
   <title>Telão</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -58,6 +58,10 @@
       <div class="brand"><span class="brand-mark"></span>TELÃO</div>
       <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">Conectando…</span></div>
       <div class="spacer"></div>
+      <button class="btn small junto-btn" id="btn-junto" title="Ver um vídeo do YouTube junto, sincronizado">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm6 4v6l5-3-5-3Z"/></svg>
+        Assistir junto
+      </button>
       <span class="me" id="me-name"></span>
       <button class="icon-btn" id="btn-settings" title="Configurações" aria-label="Configurações">
         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Zm7.4-2.5a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1L11 21h4l.4-2.6c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.2-1.6Z"/></svg>
@@ -65,6 +69,11 @@
     </header>
 
     <aside class="side">
+      <div class="junto-bar hidden" id="junto-bar">
+        <span class="jb-icon">▶</span>
+        <span id="junto-bar-text">Assistindo junto</span>
+        <button class="btn small primary" id="junto-bar-go">Entrar</button>
+      </div>
       <div class="side-head">
         <h2>Ao vivo</h2>
         <span class="count" id="live-count">0</span>
@@ -79,6 +88,7 @@
         </div>
         <p class="st-source hidden" id="st-source"></p>
         <p class="st-fps hidden" id="st-fps"></p>
+        <p class="st-privacy hidden" id="st-privacy">Tela inteira: notificações que pularem aparecem para quem assiste. <button class="linkish" id="btn-dnd">Ligar o Não perturbe</button></p>
         <div class="st-viewers hidden" id="st-viewers">
           <span class="st-viewers-title">Assistindo</span>
           <ul id="st-viewers-list"></ul>
@@ -110,8 +120,34 @@
         <div class="stage-cards" id="stage-cards"></div>
       </div>
 
+      <section class="junto hidden" id="junto">
+        <div class="junto-top">
+          <span class="junto-badge">ASSISTINDO JUNTO</span>
+          <b id="junto-title">Vídeo</b>
+          <small id="junto-by"></small>
+          <div class="spacer"></div>
+          <button class="btn small" id="junto-leave" title="Sair (os outros continuam)">Sair</button>
+          <button class="btn small danger" id="junto-end" title="Fechar o vídeo para todo mundo">Encerrar para todos</button>
+        </div>
+        <div class="junto-stage">
+          <div class="junto-frame" id="junto-frame"></div>
+          <div class="junto-cover" id="junto-cover"></div>
+          <p class="junto-err hidden" id="junto-err"></p>
+        </div>
+        <div class="junto-ctrl">
+          <button class="jc-btn" id="junto-back" title="Voltar 10 s (←)">−10</button>
+          <button class="jc-btn play" id="junto-play">▶</button>
+          <button class="jc-btn" id="junto-fwd" title="Avançar 10 s (→)">+10</button>
+          <input type="range" id="junto-seek" min="0" max="1" value="0" step="1" aria-label="Posição" />
+          <span class="junto-time" id="junto-time">0:00 / 0:00</span>
+          <input type="range" id="junto-vol" min="0" max="1" step="0.01" value="0.8" aria-label="Volume" />
+        </div>
+      </section>
+
       <div class="player hidden" id="player">
         <video id="video" autoplay playsinline></video>
+        <canvas id="marks" class="marks"></canvas>
+        <div class="point-hint hidden" id="point-hint">Clique para apontar · arraste para desenhar · Esc sai</div>
         <div class="loading hidden" id="loading"><div class="spin"></div><span id="loading-text">Conectando…</span></div>
         <div class="ov ov-top">
           <span class="live-badge">AO VIVO</span>
@@ -123,7 +159,23 @@
             <svg viewBox="0 0 24 24" width="20" height="20"><path id="ico-vol" fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4Zm12.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4Z"/></svg>
           </button>
           <input type="range" id="vol" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
+          <div class="react-bar" id="react-bar" aria-label="Reações">
+            <button data-e="😂" title="1">😂</button><button data-e="🔥" title="2">🔥</button><button data-e="👏" title="3">👏</button>
+            <button data-e="😮" title="4">😮</button><button data-e="💀" title="5">💀</button><button data-e="❤️" title="6">❤️</button>
+          </div>
           <div class="spacer"></div>
+          <button class="tool-btn" id="btn-quality" title="Qualidade: automática, sempre máxima ou leve (720p, para internet fraca)">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 17h3v3H3v-3Zm5-5h3v8H8v-8Zm5-4h3v12h-3V8Zm5-5h3v17h-3V3Z"/></svg>
+            <span>Auto</span>
+          </button>
+          <button class="tool-btn" id="btn-point" title="Apontar e desenhar na tela (P)">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>
+            <span>Apontar</span>
+          </button>
+          <button class="tool-btn" id="btn-clip" title="Salvar o último meio minuto (C)">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 6h11a2 2 0 0 1 2 2v1.5l4-2.5v10l-4-2.5V16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm4 3.5v5l4-2.5-4-2.5Z"/></svg>
+            <span>Clipe</span>
+          </button>
           <button class="icon-btn" id="btn-stats" title="Estatísticas" aria-label="Estatísticas">
             <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 20V10h3v10H4Zm6.5 0V4h3v16h-3ZM17 20v-7h3v7h-3Z"/></svg>
           </button>
@@ -136,6 +188,14 @@
   </div>
 
   <!-- ============ Convite ============ -->
+  <dialog id="dlg-junto" class="dlg">
+    <h2>Assistir junto</h2>
+    <p class="muted">Cole o link de um vídeo do YouTube. Ele toca no PC de cada um, sincronizado: quando alguém pausa ou pula, pausa e pula para todos. Não gasta a sua internet e não fica com tela preta.</p>
+    <label class="field"><span>Link do vídeo</span><input id="junto-url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" spellcheck="false" /></label>
+    <p class="error hidden" id="junto-url-err"></p>
+    <div class="dlg-actions"><button class="btn" data-close>Cancelar</button><button class="btn primary" id="btn-junto-go">Abrir para todos</button></div>
+  </dialog>
+
   <dialog id="dlg-join" class="dlg">
     <h2>Entrar na sala?</h2>
     <p class="muted" id="join-text">Você recebeu um convite para uma sala do Telão.</p>
@@ -231,6 +291,9 @@
 
       <h3 class="sub">Modo leve</h3>
       <label class="check"><input type="checkbox" name="closeToTray" /> <span><b>Fechar vai para a bandeja</b><small>Ao fechar a janela, o Telão some e fica perto do relógio gastando quase nada. A sala e o botão de transmitir continuam lá.</small></span></label>
+      <label class="check"><input type="checkbox" name="privateCapture" /> <span><b>Modo privado em jogo</b><small>Transmitindo uma tela com jogo em tela cheia, mostra só a janela do jogo: notificações do WhatsApp/Discord e outras janelas não aparecem.</small></span></label>
+      <label class="check"><input type="checkbox" name="clips" /> <span><b>Clipes de quem assiste</b><small>Guarda sempre o último meio minuto do que você está vendo; aperte C ou "Clipe" para salvar em Vídeos\Telão.</small></span></label>
+      <label class="check"><input type="checkbox" name="marksOverlay" /> <span><b>Ver na minha tela onde os amigos apontam</b><small>Enquanto você transmite, os toques e desenhos deles aparecem por cima da sua tela (só para você; não entram na transmissão).</small></span></label>
       <label class="check"><input type="checkbox" name="autoFps" /> <span><b>Ajuste automático de FPS</b><small>Igual o Discord: se o jogo pesar, a transmissão desce sozinha para 30 FPS ou 720p (sem cair para quem assiste) e volta quando der.</small></span></label>
       <label class="check"><input type="checkbox" name="notifyLive" /> <span><b>Avisar quando alguém entrar ao vivo</b><small>Uma notificação do Windows; clique nela para assistir.</small></span></label>
       <label class="check"><input type="checkbox" name="startWithWindows" /> <span><b>Iniciar com o Windows</b><small>Abre direto na bandeja quando você liga o PC. Bom para o host.</small></span></label>
@@ -250,7 +313,10 @@
 
   <div class="toast hidden" id="toast"></div>
 
+  <script src="marks.js"></script>
+  <script src="clip.js"></script>
   <script src="player.js"></script>
   <script src="app.js"></script>
+  <script src="junto.js"></script>
 </body>
 </html>

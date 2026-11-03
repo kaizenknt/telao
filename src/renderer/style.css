@@ -274,3 +274,48 @@ body.full .banners { display: none; }
 .card { padding: 13px; }
 #card-host .btn.wide { padding: 9px; }
 @media (prefers-reduced-motion: reduce) { .pill.live, #card-transmit.just-live, .live-dot, .q-dot.bad { animation: none !important; } }
+
+/* ---------- apontar, reações, clipe (1.8) ---------- */
+.marks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+.player.pointing .marks { pointer-events: auto; cursor: crosshair; }
+.player .ov { z-index: 3; }
+.player.pointing.idle .ov { opacity: 1; }
+.point-hint { position: absolute; top: 58px; left: 50%; transform: translateX(-50%); z-index: 3; pointer-events: none;
+  background: #000b; border: 1px solid #ffffff22; padding: 6px 12px; border-radius: 99px; font-size: 12.5px; color: #eee; }
+.react-bar { display: flex; gap: 2px; margin-left: 6px; padding: 3px; border-radius: 12px; background: #0007; border: 1px solid #ffffff14; }
+.react-bar button { background: none; border: 0; font-size: 19px; line-height: 1; padding: 5px 6px; border-radius: 8px; transition: transform .12s, background .12s; }
+.react-bar button:hover { background: #ffffff1a; transform: translateY(-2px) scale(1.12); }
+.react-bar button:active { transform: scale(.92); }
+.tool-btn { display: inline-flex; align-items: center; gap: 6px; background: #0007; border: 1px solid #ffffff1c; color: #eee; padding: 7px 11px; border-radius: 10px; font-size: 13px; font-weight: 600; }
+.tool-btn:hover { background: #ffffff1a; }
+.tool-btn.on { background: var(--amber); color: var(--amber-ink); border-color: transparent; }
+.tool-btn:disabled { opacity: .45; cursor: default; }
+.toast-btn { margin-left: 12px; background: var(--amber); color: var(--amber-ink); border: 0; border-radius: 7px; padding: 4px 10px; font-weight: 700; font-size: 12.5px; }
+@media (max-width: 1100px) { .tool-btn span { display: none; } }
+.tool-btn.warn { color: #ffc966; border-color: #ffc96655; }
+.chip.priv { color: #b8f5cf; border-color: #45d48344; background: #45d48314; }
+.st-privacy { font-size: 12px; color: var(--muted); margin: 0 0 8px; line-height: 1.4; }
+
+/* ---------- assistir junto ---------- */
+.junto-btn { display: inline-flex; align-items: center; gap: 7px; }
+.junto-bar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; font-size: 12.5px; line-height: 1.35;
+  background: linear-gradient(135deg, #ffb02e22, #ffb02e0a); border: 1px solid #ffb02e55; }
+.junto-bar span:nth-child(2) { flex: 1; min-width: 0; }
+.jb-icon { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--amber); color: var(--amber-ink); font-size: 11px; }
+.junto { position: absolute; inset: 0; display: grid; grid-template-rows: auto 1fr auto; background: #000; }
+.junto-top { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line); min-width: 0; }
+.junto-top b { font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.junto-top small { color: var(--muted); white-space: nowrap; }
+.junto-badge { background: var(--amber); color: var(--amber-ink); font: 800 10.5px var(--display); letter-spacing: .1em; padding: 3px 8px; border-radius: 5px; flex: none; }
+.junto-stage { position: relative; min-height: 0; }
+.junto-frame, .junto-frame iframe, .junto-frame video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; object-fit: contain; }
+.junto-cover { position: absolute; inset: 0; }
+.junto-err { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); margin: 0; max-width: 420px; text-align: center;
+  background: var(--panel); border: 1px solid var(--line); padding: 16px 18px; border-radius: 12px; color: #ffc966; }
+.junto-ctrl { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--panel); border-top: 1px solid var(--line); }
+.jc-btn { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 8px 11px; font-weight: 700; font-size: 13px; min-width: 46px; }
+.jc-btn:hover { background: #26221e; }
+.jc-btn.play { background: var(--amber); color: var(--amber-ink); border-color: transparent; min-width: 54px; font-size: 15px; }
+#junto-seek { flex: 1; accent-color: var(--amber); min-width: 80px; }
+#junto-vol { width: 90px; accent-color: var(--amber); }
+.junto-time { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }

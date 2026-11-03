@@ -16,6 +16,14 @@ function toast(msg, ms = 3200) {
   t.textContent = msg; t.classList.remove('hidden');
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), ms);
 }
+function toastAction(msg, label, fn, ms = 7000) {
+  toast(msg, ms);
+  const t = $('#toast');
+  const b = document.createElement('button');
+  b.className = 'toast-btn'; b.textContent = label;
+  b.onclick = () => { fn(); t.classList.add('hidden'); };
+  t.appendChild(b);
+}
 const show = (el, on = true) => el.classList.toggle('hidden', !on);
 function ago(iso) {
   if (!iso) return '';
@@ -169,7 +177,7 @@ function renderStageCards() {
 const video = $('#video');
 const player = new WhepPlayer(video, {
   onStatus: ({ state, why }) => {
-    if (state === 'playing') { show($('#loading'), false); return; }
+    if (state === 'playing') { show($('#loading'), false); startClipper(); return; }
     show($('#loading'));
     $('#loading-text').textContent =
       state === 'connecting' ? 'Conectando…' :
@@ -223,15 +231,54 @@ function startFeedback(name) {
     if (av1 && /av1/i.test(s.codec || '') && s.verdict?.kind === 'local') {
       if (++av1LocalBad >= 4) { av1 = false; av1HwPromise = Promise.resolve(false); cfg = await api.cfg.set({ av1Bad: true }); }
     } else av1LocalBad = 0;
+    layerTick(name, s.verdict?.kind || null);
     api.rooms.feedback({
-      path: name, viewer: cfg.name, av1,
+      path: name, viewer: cfg.name, av1, layer: lay.layer, wantsLight: lay.wantsLight,
       verdict: s.verdict?.kind || null, loss: s.lossPct ?? null, fps: s.arrivingFps ?? s.fps ?? null,
     }).catch(() => {});
   }, 3000);
 }
 
+/* ---------- qualidade por pessoa: versão máxima ou leve (720p) ----------
+ * Automático: se a SUA internet está perdendo pacotes por ~9 s, pede a versão leve para quem transmite e passa
+ * para ela quando aparecer. Depois de 2 min lisos tenta voltar para a máxima; se piorar de novo, volta e espera mais.
+ */
+const lay = { mode: 'auto', layer: 'main', wantsLight: false, bad: 0, ok: 0, okNeeded: 40, probeUntil: 0 };
+function resetLayer() { Object.assign(lay, { layer: 'main', wantsLight: lay.mode === 'leve', bad: 0, ok: 0, okNeeded: 40, probeUntil: 0 }); renderQualityBtn(); }
+async function playLayer(name, layer) {
+  lay.layer = layer;
+  const host = await api.serverHost(), auth = await api.authHeader(), av1 = await canAv1();
+  const qs = `?tv=1&n=${encodeURIComponent(cfg.name)}&av1=${av1 ? 1 : 0}`;
+  const pathName = layer === 'leve' ? name + '.leve' : name;
+  player.play(`http://${host}:${cfg.ports.webrtc}/${encodeURIComponent(pathName)}/whep${qs}`, auth);
+  renderQualityBtn();
+}
+function layerTick(name, verdict) {
+  const hasLight = !!streams.find((x) => x.name === name)?.light;
+  if (lay.mode === 'max') { lay.wantsLight = false; if (lay.layer !== 'main') playLayer(name, 'main'); return; }
+  if (lay.mode === 'leve') { lay.wantsLight = true; if (hasLight && lay.layer !== 'leve') playLayer(name, 'leve'); return; }
+  if (lay.layer === 'main') {
+    lay.bad = verdict === 'rede' ? lay.bad + 1 : 0;
+    // voltou para a máxima e piorou logo: volta para a leve e espera o dobro antes de tentar de novo
+    if (lay.probeUntil && Date.now() < lay.probeUntil && lay.bad >= 2) { lay.okNeeded = Math.min(lay.okNeeded * 2, 200); lay.wantsLight = true; lay.probeUntil = 0; }
+    if (lay.bad >= 3) lay.wantsLight = true;
+    if (lay.wantsLight && hasLight) { lay.ok = 0; playLayer(name, 'leve'); toast('Sua internet oscilou: passei para a versão leve (720p) para não travar.'); }
+  } else {
+    lay.ok = verdict === 'ok' ? lay.ok + 1 : 0;
+    if (!hasLight) { playLayer(name, 'main'); return; } // a versão leve sumiu
+    if (lay.ok >= lay.okNeeded) { lay.ok = 0; lay.bad = 0; lay.wantsLight = false; lay.probeUntil = Date.now() + 30000; playLayer(name, 'main'); }
+  }
+}
+function renderQualityBtn() {
+  const b = $('#btn-quality'); if (!b) return;
+  const cur = lay.layer === 'leve' ? '720p' : 'Máxima';
+  b.querySelector('span').textContent = lay.mode === 'auto' ? `Auto · ${cur}` : lay.mode === 'max' ? 'Máxima' : 'Leve';
+  b.classList.toggle('warn', lay.layer === 'leve');
+}
+
 async function watch(name) {
   goneCount = 0;
+  if (!$('#junto').classList.contains('hidden') && window.TelaoJunto) window.TelaoJunto.close();
   selected = name;
   show($('#stage-empty'), false);
   show($('#player'));
@@ -239,18 +286,19 @@ async function watch(name) {
   // assistindo a si mesmo: começa mudo para não dar eco
   video.muted = name === cfg.path; renderVol();
   renderStreams();
-  const host = await api.serverHost();
-  const auth = await api.authHeader();
-  // se identifica para quem transmite: nome e se abre AV1 (ele escolhe o formato pela sala)
-  const av1 = await canAv1();
-  const qs = `?tv=1&n=${encodeURIComponent(cfg.name)}&av1=${av1 ? 1 : 0}`;
-  player.play(`http://${host}:${cfg.ports.webrtc}/${encodeURIComponent(name)}/whep${qs}`, auth);
+  // playLayer se identifica para quem transmite (nome, se abre AV1) e escolhe a versão máxima ou leve
+  resetLayer();
+  const startLight = lay.mode === 'leve' && streams.find((x) => x.name === name)?.light;
+  await playLayer(name, startLight ? 'leve' : 'main');
   startFeedback(name);
+  marksWatch(name);
+  clipper.stop();
 }
 
 function closePlayer() {
   selected = null;
   clearInterval(fbTimer);
+  marksWatch(null); setPointing(false); clipper.stop();
   player.stop();
   show($('#player'), false);
   show($('#stage-empty'));
@@ -282,6 +330,114 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { if (document.body.classList.contains('full')) toggleFull(); else if (selected) closePlayer(); }
   if (e.key === 'm' || e.key === 'M') { video.muted = !video.muted; renderVol(); }
 });
+/* ---------- apontar, desenhar, reagir, clipe ---------- */
+let marksCh = null;
+const marksCanvas = $('#marks');
+// onde a imagem realmente aparece dentro do player (o vídeo fica centralizado com faixas pretas)
+function videoRect() {
+  const W = video.clientWidth, H = video.clientHeight, vw = video.videoWidth || 16, vh = video.videoHeight || 9;
+  const k = Math.min(W / vw, H / vh), w = vw * k, h = vh * k;
+  return { x: (W - w) / 2, y: (H - h) / 2, w, h };
+}
+const marks = new window.TelaoMarks(marksCanvas, { contentRect: videoRect });
+function marksWatch(name) {
+  if (marksCh) api.ev.unsub(marksCh);
+  marksCh = name ? 'p:' + name : null;
+  marks.handle({ type: 'clear' });
+  if (marksCh) api.ev.sub(marksCh);
+}
+api.ev.on((ev) => {
+  if (ev.ch === marksCh) marks.handle(ev);
+  else if (ev.ch === 'sala') onSalaEvent(ev);
+});
+const sendMark = (type, data) => { if (marksCh) api.ev.send({ ch: marksCh, type, data }); };
+
+let pointing = false;
+function setPointing(on) {
+  pointing = on;
+  $('#player').classList.toggle('pointing', on);
+  $('#btn-point').classList.toggle('on', on);
+  show($('#point-hint'), on);
+}
+$('#btn-point').addEventListener('click', () => setPointing(!pointing));
+$('#btn-dnd').addEventListener('click', () => api.util.open('ms-settings:notifications'));
+$('#btn-quality').addEventListener('click', () => {
+  lay.mode = { auto: 'max', max: 'leve', leve: 'auto' }[lay.mode];
+  lay.wantsLight = lay.mode === 'leve'; lay.bad = 0; lay.ok = 0;
+  renderQualityBtn();
+  toast(lay.mode === 'auto' ? 'Qualidade automática: troca sozinho se sua internet oscilar.'
+    : lay.mode === 'max' ? 'Sempre a qualidade máxima.' : 'Versão leve (720p): pedindo para quem transmite…');
+});
+(() => {
+  let down = null, stroke = null, sendT = null;
+  const norm = (e) => {
+    const r = videoRect(), b = marksCanvas.getBoundingClientRect();
+    const x = (e.clientX - b.left - r.x) / r.w, y = (e.clientY - b.top - r.y) / r.h;
+    return [Math.round(Math.min(1, Math.max(0, x)) * 1000) / 1000, Math.round(Math.min(1, Math.max(0, y)) * 1000) / 1000];
+  };
+  const flush = () => { if (stroke && stroke.buf.length) { sendMark('draw', { id: stroke.id, pts: stroke.buf }); stroke.buf = []; } };
+  marksCanvas.addEventListener('pointerdown', (e) => {
+    if (!pointing || e.button !== 0) return;
+    marksCanvas.setPointerCapture(e.pointerId);
+    down = { x: e.clientX, y: e.clientY, p: norm(e) };
+  });
+  marksCanvas.addEventListener('pointermove', (e) => {
+    if (!down) return;
+    if (!stroke && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) {
+      stroke = { id: Math.random().toString(36).slice(2, 8), buf: [down.p] };
+      sendT = setInterval(flush, 60);
+    }
+    if (stroke) stroke.buf.push(norm(e));
+  });
+  const up = (e) => {
+    if (!down) return;
+    if (stroke) { flush(); clearInterval(sendT); stroke = null; }
+    else { const [x, y] = down.p; sendMark('ping', { x, y }); }
+    down = null;
+  };
+  marksCanvas.addEventListener('pointerup', up);
+  marksCanvas.addEventListener('pointercancel', up);
+})();
+
+let lastReact = 0;
+function react(emoji) {
+  const now = Date.now();
+  if (now - lastReact < 350) return;
+  lastReact = now;
+  sendMark('react', emoji);
+}
+$('#react-bar').addEventListener('click', (e) => { const b = e.target.closest('button[data-e]'); if (b) react(b.dataset.e); });
+
+// clipe: grava o que você está vendo (os últimos ~30–60 s) e salva em Vídeos\Telão
+const clipper = new window.TelaoClipper();
+function startClipper() {
+  const ok = cfg.clips !== false && video.srcObject && window.TelaoClipper.pick();
+  if (ok && clipper.stream !== video.srcObject) clipper.start(video.srcObject); // reconectou = stream novo
+  $('#btn-clip').disabled = !ok;
+  $('#btn-clip').title = ok ? 'Salvar o último meio minuto (C)' : 'Clipes indisponíveis neste PC';
+}
+async function takeClip() {
+  if (!clipper.running) return toast('O clipe começa a gravar quando o vídeo aparece.');
+  const btn = $('#btn-clip'); btn.disabled = true;
+  try {
+    const c = await clipper.take();
+    if (!c || !c.blob.size) return toast('Ainda não deu tempo de gravar nada.');
+    const file = await api.clip.save({ data: await c.blob.arrayBuffer(), ext: c.ext, who: selected });
+    toastAction(`Clipe salvo (${c.seconds} s) em Vídeos\\Telão.`, 'Mostrar', () => api.clip.show(file));
+  } catch (e) { toast('Não consegui salvar o clipe: ' + e.message); }
+  finally { btn.disabled = false; }
+}
+$('#btn-clip').addEventListener('click', takeClip);
+
+document.addEventListener('keydown', (e) => {
+  if (!selected || e.target.closest('input, textarea, dialog') || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (e.key === 'p' || e.key === 'P') setPointing(!pointing);
+  if (e.key === 'c' || e.key === 'C') takeClip();
+  if (e.key === 'Escape' && pointing) { setPointing(false); e.stopImmediatePropagation(); }
+  const i = '123456'.indexOf(e.key);
+  if (i >= 0) react(['😂', '🔥', '👏', '😮', '💀', '❤️'][i]);
+}, true);
+
 // esconde os controles quando o mouse fica parado
 let idleT;
 $('#player').addEventListener('mousemove', () => {
@@ -309,6 +465,8 @@ function renderStream() {
       [stState.source, 'src'], [stState.quality, ''], [stState.codec, stState.codec === 'AV1' ? 'av1' : ''],
       [stState.kbpsScale && stState.kbpsScale < 1 ? `taxa ${Math.round(stState.kbpsScale * 100)}%` : null, 'warn'],
       [stState.audioLabel ? '♪ ' + stState.audioLabel : null, 'audio'],
+      [stState.privateGame ? `🔒 só a janela de ${stState.privateGame}` : null, 'priv'],
+      [stState.light ? 'versão leve ligada' : null, 'warn'],
     ];
     for (const [t, c] of chips) {
       if (!t) continue;
@@ -318,6 +476,8 @@ function renderStream() {
     }
   }
   if (!live) show($('#st-viewers'), false);
+  // tela inteira sem jogo: avisa que notificações aparecem e oferece o Não perturbe do Windows
+  show($('#st-privacy'), live && !!stState.wholeScreen);
   show($('#st-hint'), !live);
   $('#st-hint').textContent =
     live ? '' :
@@ -569,6 +729,9 @@ $('#btn-settings').addEventListener('click', async () => {
   form.closeToTray.checked = !!cfg.closeToTray;
   form.notifyLive.checked = !!cfg.notifyLive;
   form.autoFps.checked = cfg.autoFps !== false;
+  form.privateCapture.checked = cfg.privateCapture !== false;
+  form.clips.checked = cfg.clips !== false;
+  form.marksOverlay.checked = cfg.marksOverlay !== false;
   form.startWithWindows.checked = !!cfg.startWithWindows;
   show($('#settings-error'), false);
   syncModeFields();
@@ -594,7 +757,8 @@ form.addEventListener('submit', async (e) => {
   cfg = await api.cfg.set({
     name: form.name.value.trim(), hosting: host, server: form.server.value.trim(),
     password: form.password.value,
-    closeToTray: form.closeToTray.checked, notifyLive: form.notifyLive.checked, autoFps: form.autoFps.checked, startWithWindows: form.startWithWindows.checked,
+    closeToTray: form.closeToTray.checked, notifyLive: form.notifyLive.checked, autoFps: form.autoFps.checked,
+    privateCapture: form.privateCapture.checked, clips: form.clips.checked, marksOverlay: form.marksOverlay.checked, startWithWindows: form.startWithWindows.checked,
   });
   $('#dlg-settings').close();
   renderMe(); renderHost();
