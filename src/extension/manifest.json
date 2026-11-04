@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Telão — assistir junto",
+  "version": "1.0.0",
+  "description": "Liga o vídeo desta aba ao Telão para assistir junto com os amigos, sincronizado (tocar, pausar e pular valem para todos).",
+  "icons": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "all_frames": true, "match_about_blank": true, "run_at": "document_idle" }
+  ],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "action": { "default_title": "Telão: assistir junto" }
+}

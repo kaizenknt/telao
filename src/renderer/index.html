@@ -134,6 +134,25 @@
           <div class="junto-cover" id="junto-cover"></div>
           <p class="junto-err hidden" id="junto-err"></p>
           <p class="junto-webhint hidden" id="junto-webhint"></p>
+          <button class="btn small junto-tobrowser hidden" id="junto-tobrowser" title="Para sites com verificação 'sou humano': cada um abre no próprio Chrome e o Telão sincroniza">O site pede "sou humano"? Abrir só no meu navegador e transmitir</button>
+          <div class="junto-browser hidden" id="junto-browser">
+            <div class="jb-card">
+              <span class="junto-badge">NO SEU NAVEGADOR</span>
+              <h2 id="jb-title">Assistindo <b id="jb-site">site</b></h2>
+              <p class="muted" id="jb-desc"></p>
+              <ul class="jb-steps">
+                <li id="jb-s1"><i></i><span></span></li>
+                <li id="jb-s2"><i></i><span></span></li>
+                <li id="jb-s3"><i></i><span></span></li>
+                <li id="jb-s4" class="hidden"><i></i><span></span></li>
+              </ul>
+              <div class="jb-actions">
+                <button class="btn primary hidden" id="jb-install">Instalar a extensão (1 vez)</button>
+                <button class="btn" id="jb-focus">Ir para a aba</button>
+                <button class="btn" id="jb-reopen">Abrir o site de novo</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="junto-ctrl">
           <button class="jc-btn" id="junto-back" title="Voltar 10 s (←)">−10</button>
@@ -174,6 +193,13 @@
             <svg viewBox="0 0 24 24" width="20" height="20"><path id="ico-vol" fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4Zm12.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4Z"/></svg>
           </button>
           <input type="range" id="vol" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
+          <div class="remote-bar hidden" id="remote-bar" title="Controle o vídeo de quem abriu o site">
+            <button class="rb-btn" data-c="back" title="Voltar 10 s">−10</button>
+            <button class="rb-btn play" data-c="toggle" id="rb-play" title="Tocar/pausar para todos">▶</button>
+            <button class="rb-btn" data-c="fwd" title="Avançar 10 s">+10</button>
+            <input type="range" id="rb-seek" min="0" max="1" value="0" step="1" aria-label="Posição do vídeo" />
+            <span class="rb-time" id="rb-time">0:00</span>
+          </div>
           <div class="react-bar" id="react-bar" aria-label="Reações">
             <button data-e="😂" title="1">😂</button><button data-e="🔥" title="2">🔥</button><button data-e="👏" title="3">👏</button>
             <button data-e="😮" title="4">😮</button><button data-e="💀" title="5">💀</button><button data-e="❤️" title="6">❤️</button>
@@ -209,6 +235,19 @@
     <p id="cd-msg"></p>
   </div>
 
+  <dialog id="dlg-ext" class="dlg">
+    <h2>Instalar a extensão do Telão</h2>
+    <p class="muted">Uma vez só, em cada PC que vai assistir. Funciona no Chrome, Edge, Brave e Opera. A pasta da extensão acabou de abrir no Explorer.</p>
+    <ol class="ext-steps">
+      <li>No navegador, abra a página de extensões: digite <code>chrome://extensions</code> na barra de endereço (no Edge: <code>edge://extensions</code>).</li>
+      <li>Ligue o <b>Modo do desenvolvedor</b> (canto superior direito; no Edge fica na lateral).</li>
+      <li>Clique em <b>Carregar sem compactação</b> e escolha a pasta que abriu (<code>extensao-navegador</code>).</li>
+      <li>Pronto: o ícone do Telão aparece nas extensões. Deixe o Telão aberto e volte aqui.</li>
+    </ol>
+    <p class="hint">A extensão só enxerga o vídeo das páginas e conversa com o Telão dentro do seu PC; não manda nada para a internet.</p>
+    <div class="dlg-actions"><button class="btn primary" data-close>Entendi</button></div>
+  </dialog>
+
   <dialog id="dlg-junto" class="dlg">
     <h2>Assistir junto</h2>
     <p class="muted">Cole o link. O vídeo toca no PC de cada um, sincronizado: quando alguém pausa ou pula, pausa e pula para todos. Não gasta a sua internet e não fica com tela preta.</p>
@@ -216,9 +255,10 @@
     <div class="sites"><span>YouTube</span><span>Twitch</span><span>Kick</span><span>Vimeo</span><span>sites de filme e série</span><span>qualquer link com vídeo</span></div>
     <label class="field"><span>Link do vídeo</span><input id="junto-url" placeholder="Cole o link da página do vídeo" autocomplete="off" spellcheck="false" /></label>
     <p class="error hidden" id="junto-url-err"></p>
+    <label class="check inbrowser"><input type="checkbox" id="junto-inbrowser" /> <span><b>Só eu abro o site (no meu navegador) e transmito</b><small>Para sites que pedem "sou humano" (Cloudflare) ou login: o site abre só no seu Chrome/Edge, o Telão transmite a janela e os outros assistem e controlam (tocar, pausar, pular) pelo Telão deles, sem abrir nada. Precisa da extensão do Telão só no seu navegador.</small></span></label>
     <div class="drm-box">
       <b>Netflix, Prime Video, Disney+, Max, Globoplay…</b>
-      <span>Esses sites têm proteção de cópia e não deixam ninguém embutir o vídeo. Cada um abre no próprio navegador e o Telão faz uma contagem 3-2-1 ao mesmo tempo para todos darem play juntos.</span>
+      <span>Cole o link normalmente: abre no navegador de cada um (cada um na sua conta) e sincroniza pela extensão. Sem a extensão, dá para usar a contagem 3-2-1 para todos darem play juntos.</span>
       <button class="btn small" id="btn-countdown">Fazer contagem para todos</button>
     </div>
     <div class="dlg-actions"><button class="btn" data-close>Cancelar</button><button class="btn primary" id="btn-junto-go">Abrir para todos</button></div>

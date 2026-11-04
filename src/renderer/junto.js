@@ -30,9 +30,11 @@
     if (/^[^\s/]+\.[a-z]{2,}(\/\S*)?$/i.test(url)) return { kind: 'web', src: 'https://' + url, pos: 0 };
     return null;
   }
-  const SITE = { yt: 'YouTube', twitch: 'Twitch', vimeo: 'Vimeo', kick: 'Kick', hls: 'transmissão', file: 'vídeo', web: 'site' };
+  const SITE = { yt: 'YouTube', twitch: 'Twitch', vimeo: 'Vimeo', kick: 'Kick', hls: 'transmissão', file: 'vídeo', web: 'site', browser: 'site', remote: 'site' };
   const BRIDGE = ['yt', 'twitch', 'vimeo', 'kick', 'hls'];
-  const KINDS = [...BRIDGE, 'file', 'web'];
+  const KINDS = [...BRIDGE, 'file', 'web', 'browser', 'remote'];
+  const baseDomain = (h) => { const p = String(h || '').toLowerCase().replace(/^www\./, '').split('.').filter(Boolean); if (p.length <= 2) return p.join('.');
+    return (['com', 'net', 'org', 'gov', 'edu', 'co'].includes(p[p.length - 2]) && p[p.length - 1].length === 2 ? p.slice(-3) : p.slice(-2)).join('.'); };
   const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return 'site'; } };
 
   // ---------- players (YouTube pela ponte no GitHub Pages; arquivo direto num <video>) ----------
@@ -116,6 +118,105 @@
     return api_;
   }
 
+  /* ---------- pelo navegador de verdade de cada um (extensão "Telão") ----------
+   * Para sites com verificação "sou humano" e streamings (Netflix, Prime…): o site abre no Chrome/Edge da
+   * própria pessoa, a extensão acha o vídeo na aba e o Telão sincroniza por ela.
+   */
+  const opened = new Set();
+  function browserMedia(box, src) {
+    const want = baseDomain(hostOf(src));
+    const st = { found: false, tab: null, frameId: 0, time: 0, dur: 0, paused: true, live: false, rs: 0, noSeek: false, connected: false };
+    const panel = $('#junto-browser');
+    show(panel, true);
+    const jbs = $('#jb-site'); if (jbs) jbs.textContent = hostOf(src);
+    if (!opened.has(src)) { opened.add(src); api.bl.open(src); }
+    const render = () => {
+      const step = (id, ok, txt) => { const el = $(id); el.classList.toggle('ok', ok); el.querySelector('span').textContent = txt; };
+      step('#jb-s1', st.connected, st.connected ? 'Extensão do Telão conectada' : 'Extensão do Telão não encontrada no navegador');
+      step('#jb-s2', !!st.tab, st.tab ? `Aba aberta: ${st.tab.title || hostOf(st.tab.url)}` : `Esperando a aba de ${hostOf(src)} abrir`);
+      step('#jb-s3', st.found, st.found ? (st.noSeek ? 'Vídeo encontrado (neste site só tocar/pausar sincronizam)' : 'Vídeo encontrado: sincronizando com todo mundo') : 'Abra o vídeo e dê play uma vez no site');
+      show($('#jb-install'), !st.connected);
+      show($('#jb-focus'), !!st.tab);
+    };
+    const onTabs = ({ tabs, connected }) => {
+      st.connected = connected;
+      const same = (tabs || []).filter((t) => baseDomain(hostOf(t.url)) === want);
+      const pick = same.find((t) => t.video) || same[0] || (tabs || []).find((t) => t.video && !t.video.paused) || null;
+      st.tab = pick;
+      const v = pick && pick.video;
+      if (v) {
+        const first = !st.found;
+        Object.assign(st, { found: true, frameId: pick.frameId, time: v.time, dur: v.dur, paused: v.paused, live: v.live, rs: v.rs, noSeek: !!v.noSeek });
+        if (first) { api_.onReady && api_.onReady(); api_.onFound && api_.onFound(true); }
+        api_.onTick && api_.onTick(st);
+      } else if (st.found) { st.found = false; }
+      render();
+    };
+    const off = api.bl.onTabs(onTabs);
+    api.bl.status().then((x) => onTabs(x || {})).catch(() => {});
+    render();
+    const cmd = (c) => { if (st.tab && st.found) api.bl.cmd(st.tab.tabId, st.frameId, c); };
+    const api_ = {
+      play: () => cmd({ cmd: 'play' }), pause: () => cmd({ cmd: 'pause' }),
+      seek: (t) => { if (st.noSeek) return; st.time = t; cmd({ cmd: 'seek', time: t }); }, volume: () => {}, // volume: no próprio site
+      time: () => st.time, duration: () => st.dur, playing: () => !st.paused, ready: () => st.found,
+      live: () => st.live || st.noSeek, noControl: () => false, web: true, browser: true,
+      focus: () => st.tab && api.bl.focus(st.tab.tabId), reopen: () => api.bl.open(src), raw: () => st,
+      destroy: () => { if (typeof off === 'function') off(); show(panel, false); },
+    };
+    return api_;
+  }
+
+  /* ---------- "só eu abro": o site abre no navegador de quem colou o link, o Telão dele transmite a janela
+   * e os outros controlam pela barra do player (os comandos chegam aqui pelo canal da transmissão). ---------- */
+  const R = { streaming: false, ctlT: null, ch: null, lastStart: 0 };
+  function hostCmd(patch) {
+    const m = J.media; if (!m || !m.ready()) return;
+    if ('playing' in patch) (patch.playing ? m.play() : m.pause());
+    if ('pos' in patch && !('playing' in patch && Math.abs(patch.pos - m.time()) < 2)) m.seek(Math.max(0, patch.pos));
+  }
+  window.onRemoteCtl = (ev) => {
+    if (!J.state || J.state.kind !== 'remote' || J.state.host !== cfg.path || !J.media || !J.media.ready()) return;
+    const d = ev.data || {}, m = J.media;
+    if (d.cmd === 'toggle') hostCmd({ playing: !m.playing() });
+    if (d.cmd === 'play') hostCmd({ playing: true });
+    if (d.cmd === 'pause') hostCmd({ playing: false });
+    if (d.cmd === 'seek' && isFinite(d.time)) hostCmd({ pos: +d.time });
+    if (d.cmd === 'skip' && isFinite(d.by)) hostCmd({ pos: m.time() + +d.by });
+    toast(`${ev.from}: ${d.cmd === 'toggle' ? (m.playing() ? 'pausou' : 'deu play') : d.cmd === 'skip' ? (d.by > 0 ? 'avançou' : 'voltou') + ' ' + Math.abs(d.by) + ' s' : d.cmd === 'seek' ? 'pulou para ' + fmt(d.time) : d.cmd}`, 1800);
+  };
+  // acha a janela do navegador com a aba do vídeo e começa a transmitir só ela (com o som só do navegador)
+  async function startRemoteStream(tab) {
+    if (Date.now() - R.lastStart < 15000) return;
+    R.lastStart = Date.now();
+    const list = await api.stream.sources().catch(() => []);
+    const clean = (x) => String(x || '').replace(/[\u200b-\u200f]/g, '').trim();
+    const t = clean(tab.title).slice(0, 40);
+    const wins = list.filter((x) => x.kind === 'window');
+    const w = (t && wins.find((x) => clean(x.name).includes(t))) || wins.find((x) => /chrome|edge|brave|opera|vivaldi|firefox/i.test(clean(x.name)));
+    if (!w) { toast('Não achei a janela do navegador para transmitir. Deixe ela aberta (pode ficar atrás) e tente "Ir para a aba".', 7000); return; }
+    const r = await api.stream.start({ sourceId: w.id, kind: 'window', sourceName: w.name, audio: 'auto', quality: (cfg.lastStream && cfg.lastStream.quality) || '1080p60' });
+    if (r && r.ok) { R.streaming = true; toast('Transmitindo a janela do navegador para a sala. Dica: deixe o vídeo em tela cheia no site.', 6000); }
+  }
+  function remoteHostStart() {
+    R.ch = 'p:' + cfg.path; api.ev.sub(R.ch);
+    clearInterval(R.ctlT);
+    R.ctlT = setInterval(() => {
+      const m = J.media;
+      if (!J.state || J.state.kind !== 'remote' || !m || !m.raw) return;
+      const st = m.raw();
+      $('#jb-s4').classList.toggle('ok', R.streaming && stState.state === 'ao-vivo');
+      $('#jb-s4 span').textContent = R.streaming && stState.state === 'ao-vivo' ? 'Transmitindo para a sala: os outros assistem e controlam pelo Telão' : 'Vai transmitir a janela do navegador quando o vídeo aparecer';
+      if (st.found && st.tab && !(R.streaming && ['ao-vivo', 'iniciando'].includes(stState.state))) startRemoteStream(st.tab);
+      if (st.found) api.ev.send({ ch: R.ch, type: 'ctlstate', data: { time: st.time, dur: st.dur, paused: st.paused, live: st.live || st.noSeek, site: hostOf(J.state.src), title: st.tab && st.tab.title } });
+    }, 1000);
+  }
+  function remoteHostStop() {
+    clearInterval(R.ctlT);
+    if (R.ch) { api.ev.send({ ch: R.ch, type: 'ctlstate', data: null }); api.ev.unsub(R.ch); R.ch = null; }
+    if (R.streaming) { api.stream.stop(); R.streaming = false; }
+  }
+
   function fileMedia(box, src) {
     const v = document.createElement('video');
     v.src = src; v.playsInline = true; v.preload = 'auto';
@@ -135,6 +236,7 @@
   let quietUntil = 0; // depois de um comando nosso, ignora as mudanças (foram nossas)
   let prevSite = null; // última leitura do player do site
   function webLocalChange(st) {
+    if (J.state && J.state.kind === 'remote') return; // no modo "só eu abro" o vídeo de quem abriu é a referência
     const s = J.state, prev = prevSite, nowMs = Date.now();
     prevSite = { paused: st.paused, time: st.time, at: nowMs };
     // só reage a uma MUDANÇA dentro do site (alguém clicou lá), nunca ao estado parado de quem acabou de entrar
@@ -148,7 +250,7 @@
   const expected = (s) => s.pos + (s.playing ? (now() - s.at) / 1000 : 0);
   function apply(tol = 1.2) {
     const s = J.state, m = J.media;
-    if (!s || !m || !m.ready() || m.noControl()) return;
+    if (!s || !m || !m.ready() || m.noControl() || s.kind === 'remote') return;
     const want = expected(s);
     let did = false;
     if (!m.live() && Math.abs(m.time() - want) > tol) { m.seek(want); did = true; } // ao vivo não tem como pular
@@ -158,6 +260,7 @@
   }
   async function publish(patch, fromSite) {
     if (!J.state) return;
+    if (J.state.kind === 'remote') return hostCmd(patch); // quem abriu o link manda direto no navegador dele
     J.state = { ...J.state, ...patch, at: now(), by2: cfg.name };
     if (!fromSite) apply(0.3); else quietUntil = Date.now() + 1500;
     renderUi();
@@ -169,12 +272,21 @@
   function mount() {
     const box = $('#junto-frame');
     if (J.media) { J.media.destroy(); J.media = null; }
+    show($('#junto-browser'), false);
     box.textContent = '';
     const s = J.state;
     prevSite = null;
-    J.media = BRIDGE.includes(s.kind) ? bridgeMedia(box, s) : s.kind === 'web' ? webMedia(box, s.src) : fileMedia(box, s.src);
-    $('#junto').classList.toggle('web', s.kind === 'web');
+    J.media = BRIDGE.includes(s.kind) ? bridgeMedia(box, s) : s.kind === 'web' ? webMedia(box, s.src) : (s.kind === 'browser' || s.kind === 'remote') ? browserMedia(box, s.src) : fileMedia(box, s.src);
+    $('#junto').classList.toggle('web', s.kind === 'web' || s.kind === 'browser' || s.kind === 'remote');
+    show($('#jb-s4'), s.kind === 'remote');
+    $('#jb-title').innerHTML = '';
+    $('#jb-title').append(s.kind === 'remote' ? 'Abrindo ' : 'Assistindo ', Object.assign(document.createElement('b'), { textContent: hostOf(s.src) }), s.kind === 'remote' ? ' no seu navegador' : ' no navegador de cada um');
+    $('#jb-desc').textContent = s.kind === 'remote'
+      ? 'Só você abre o site (no seu Chrome/Edge, onde a verificação "sou humano" e o login funcionam). O Telão transmite a janela do navegador e os outros assistem e controlam (tocar, pausar, pular) pelo Telão deles, sem abrir nada.'
+      : 'O site abriu no seu Chrome/Edge. A extensão do Telão acha o vídeo na aba e sincroniza: tocar, pausar e pular valem para todos.';
+    if (s.kind === 'remote') remoteHostStart();
     show($('#junto-webhint'), s.kind === 'web');
+    show($('#junto-tobrowser'), s.kind === 'web');
     $('#junto-webhint').textContent = 'Abra o vídeo e dê play no player do site (escolha servidor/legenda nele). O Telão acha o vídeo e sincroniza com todo mundo.';
     if (J.media.web) {
       J.media.onFound = (ok, late) => {
@@ -195,7 +307,7 @@
     J.media.onTitle = (t) => { if (J.state && !J.state.title && J.state.by === cfg.name) publish({ title: t }); };
     show($('#junto-err'), false);
     show($('#junto-cc'), BRIDGE.includes(s.kind) && s.kind !== 'kick'); show($('#junto-q'), BRIDGE.includes(s.kind) && s.kind !== 'kick');
-    if (s.kind === 'web') { show($('#junto-cc'), false); show($('#junto-q'), false); }
+    if (s.kind === 'web' || s.kind === 'browser' || s.kind === 'remote') { show($('#junto-cc'), false); show($('#junto-q'), false); }
     closeMenus();
   }
 
@@ -256,6 +368,15 @@
   $('#junto-full').addEventListener('click', () => { if (typeof toggleFull === 'function') toggleFull(); });
   function openJunto() {
     if (!J.state) return;
+    if (J.state.kind === 'remote' && J.state.host !== cfg.path) {
+      // quem não abriu o link: assiste a transmissão de quem abriu, com a barra de controle no player
+      window.TelaoRemoteWant = J.state.host;
+      if (J.open) closeJunto();
+      if (streams.some((x) => x.name === J.state.host)) watch(J.state.host);
+      else toast(`Esperando ${J.state.by} começar a transmitir o vídeo… abre sozinho.`, 6000);
+      renderUi();
+      return;
+    }
     if (typeof selected !== 'undefined' && selected) closePlayer();
     J.open = true;
     show($('#stage-empty'), false); show($('#player'), false); show($('#junto'), true);
@@ -280,7 +401,7 @@
     show(bar, !!s && !J.open);
     if (s) {
       $('#junto-bar-text').textContent = `${s.by} abriu ${s.title ? '“' + s.title + '”' : 'um vídeo'} para assistir junto`;
-      $('#junto-title').textContent = s.title || (s.kind === 'web' ? hostOf(s.src) : `Vídeo do ${SITE[s.kind] || 'site'}`);
+      $('#junto-title').textContent = s.title || (['web', 'browser', 'remote'].includes(s.kind) ? hostOf(s.src) : `Vídeo do ${SITE[s.kind] || 'site'}`);
       $('#junto-by').textContent = `aberto por ${s.by}` + (s.by2 && s.by2 !== s.by ? ` · último controle: ${s.by2}` : '');
     }
     if (!J.open || !J.media) return;
@@ -298,14 +419,20 @@
   window.onSalaEvent = function (ev) {
     if (ev.type === 'junto' && ev.data && KINDS.includes(ev.data.kind)) {
       const prev = J.state;
+      if (prev && prev.kind === 'remote' && prev.host === cfg.path && !(ev.data.kind === 'remote' && ev.data.host === cfg.path)) remoteHostStop();
       J.state = ev.data;
       if (J.open && !sameSource(prev, J.state)) mount();
       apply(0.6);
-      if (!prev && !ev.replay && ev.from !== cfg.name) toastAction(`${ev.data.by} abriu um vídeo para assistir junto.`, 'Entrar', openJunto, 9000);
+      if (!prev && !ev.replay && ev.from !== cfg.name) {
+        if (ev.data.kind === 'remote') { window.TelaoRemoteWant = ev.data.host; toastAction(`${ev.data.by} abriu ${hostOf(ev.data.src)} e vai transmitir: dá para controlar daqui.`, 'Assistir', openJunto, 9000); }
+        else toastAction(`${ev.data.by} abriu um vídeo para assistir junto.`, 'Entrar', openJunto, 9000);
+      }
       renderUi();
     }
     if (ev.type === 'junto-fim') {
       const was = !!J.state;
+      if (J.state && J.state.kind === 'remote' && J.state.host === cfg.path && ev.from !== cfg.name) remoteHostStop();
+      window.TelaoRemoteWant = null;
       J.state = null;
       if (J.open) closeJunto();
       renderUi();
@@ -350,13 +477,14 @@
     const p = parse($('#junto-url').value);
     if (!p) { $('#junto-url-err').textContent = 'Isso não parece um link. Cole o endereço da página do vídeo (começando com https://).'; show($('#junto-url-err'), true); return; }
     $('#dlg-junto').close();
-    if (p.kind === 'drm') {
-      const site = SITES[p.site.toLowerCase()] || 'esse site';
-      toast(`${site} tem proteção de cópia: cada um abre no próprio navegador e vocês dão play juntos na contagem.`, 7000);
-      return startCountdown(site);
+    if (p.kind === 'drm' || $('#junto-inbrowser').checked) {
+      // só quem colou o link abre o site (no navegador dele) e transmite; os outros controlam pelo Telão
+      const url = /^https?:/i.test(p.src || '') ? p.src : $('#junto-url').value.trim();
+      p.kind = 'remote'; p.src = /^https?:\/\//i.test(url) ? url : 'https://' + url; p.pos = 0; delete p.id;
     }
     await syncClock();
     J.state = { kind: p.kind, id: p.id, src: p.src, playing: false, pos: p.pos, at: now(), by: cfg.name, title: '' };
+    if (p.kind === 'remote') J.state.host = cfg.path;
     openJunto();
     await api.ev.send({ ch: 'sala', type: 'junto', data: J.state, sticky: true });
     toast('Pronto: a galera recebeu o convite. Aperte ▶ quando todos estiverem dentro.');
@@ -365,6 +493,16 @@
   $('#btn-countdown').addEventListener('click', () => { $('#dlg-junto').close(); startCountdown(''); });
   $('#junto-bar-go').addEventListener('click', openJunto);
   $('#junto-current-go').addEventListener('click', () => { $('#dlg-junto').close(); openJunto(); });
+  // o site não abre aqui dentro (verificação "sou humano")? passa todo mundo para o navegador de verdade
+  $('#junto-tobrowser').addEventListener('click', async () => {
+    if (!J.state) return;
+    J.state = { ...J.state, kind: 'remote', host: cfg.path, by: cfg.name, playing: false, pos: 0, at: now(), by2: cfg.name };
+    mount(); renderUi();
+    await api.ev.send({ ch: 'sala', type: 'junto', data: J.state, sticky: true });
+  });
+  $('#jb-install').addEventListener('click', () => { api.bl.install(); show($('#dlg-ext'), true); $('#dlg-ext').showModal(); });
+  $('#jb-reopen').addEventListener('click', () => J.media && J.media.reopen && J.media.reopen());
+  $('#jb-focus').addEventListener('click', () => J.media && J.media.focus && J.media.focus());
   $('#junto-play').addEventListener('click', () => J.media && publish({ playing: !J.state.playing, pos: J.media.time() }));
   $('#junto-back').addEventListener('click', () => J.media && publish({ pos: Math.max(0, J.media.time() - 10) }));
   $('#junto-fwd').addEventListener('click', () => J.media && publish({ pos: J.media.time() + 10 }));
@@ -372,6 +510,7 @@
   $('#junto-vol').addEventListener('input', (e) => J.media && J.media.volume(+e.target.value));
   $('#junto-leave').addEventListener('click', closeJunto);
   $('#junto-end').addEventListener('click', async () => {
+    if (J.state && J.state.kind === 'remote' && J.state.host === cfg.path) remoteHostStop();
     await api.ev.send({ ch: 'sala', type: 'junto-fim', clearSticky: true });
     J.state = null; closeJunto();
   });

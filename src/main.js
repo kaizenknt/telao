@@ -27,6 +27,7 @@ const { createRoomProxy } = require('./roomproxy');
 const invites = require('./invite');
 const { createRoomEvents } = require('./roomevents');
 const webctl = require('./webctl');
+const { createBrowserLink } = require('./browserlink');
 
 const PORTS = { webrtc: 8889, ice: 8189, api: 9997, apiInner: 9996 }; // 9997 = porteiro (roomproxy), 9996 = API do MediaMTX só por dentro
 const ROOM_USER = 'sala';
@@ -308,6 +309,11 @@ function registerIpc() {
   ipcMain.handle('ev:send', (_e, ev) => roomEv.send({ ...ev, from: cfg.name }));
   ipcMain.handle('ev:now', () => roomEv.serverNow());
   ipcMain.handle('web:probe', (_e, id) => webctl.probe(Number(id)));
+  ipcMain.handle('bl:status', () => ({ connected: browserLink.connected(), tabs: browserLink.tabs() }));
+  ipcMain.handle('bl:cmd', (_e, tabId, frameId, c) => browserLink.command(Number(tabId), Number(frameId) || 0, c));
+  ipcMain.handle('bl:focus', (_e, tabId) => browserLink.focus(Number(tabId)));
+  ipcMain.handle('bl:open', (_e, url) => { if (/^https?:\/\//i.test(String(url))) shell.openExternal(String(url)); });
+  ipcMain.handle('bl:install', () => { const dir = installExtension(); shell.openPath(dir); return dir; });
   ipcMain.handle('web:cmd', (_e, id, c) => webctl.command(Number(id), c));
   // clipe de quem assiste: salva em Vídeos\Telão
   ipcMain.handle('clip:save', async (_e, { data, ext, who }) => {
@@ -395,6 +401,20 @@ const roomEv = createRoomEvents({
   },
   log: (m) => { mtxLog.push(m); if (mtxLog.length > 300) mtxLog.shift(); },
 });
+
+/* ---------------- Extensão do navegador (assistir junto pelo Chrome de verdade) ---------------- */
+const browserLink = createBrowserLink({
+  onTabs: (tabs, connected) => { if (win && !win.isDestroyed()) win.webContents.send('bl:tabs', { tabs, connected }); },
+  log: (m) => { mtxLog.push(m); if (mtxLog.length > 300) mtxLog.shift(); },
+});
+// copia a extensão para uma pasta fixa (o navegador carrega dela) e abre a pasta
+function installExtension() {
+  const src = path.join(__dirname, 'extension');
+  const dest = path.join(app.getPath('userData'), 'extensao-navegador');
+  fs.mkdirSync(dest, { recursive: true });
+  for (const f of fs.readdirSync(src)) fs.copyFileSync(path.join(src, f), path.join(dest, f));
+  return dest;
+}
 
 /* Janela transparente por cima da tela que você está transmitindo: mostra onde os amigos apontam/desenham.
  * Fica fora da captura (proteção de conteúdo), então quem assiste não vê em dobro: cada um desenha no seu player. */
@@ -628,6 +648,9 @@ app.whenReady().then(() => {
     else app.setAsDefaultProtocolClient('telao');
   } catch {}
   registerIpc();
+  browserLink.start();
+  // extensão já instalada: mantém a pasta dela com a versão mais nova (vem junto nas atualizações)
+  try { if (fs.existsSync(path.join(app.getPath('userData'), 'extensao-navegador', 'manifest.json'))) installExtension(); } catch {}
   createTray();
   // Iniciado junto com o Windows: abre direto na bandeja, sem janela.
   const startHidden = process.argv.includes('--tray') && cfg.name && cfg.password;

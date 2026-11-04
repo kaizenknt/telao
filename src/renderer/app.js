@@ -130,6 +130,7 @@ function autoWatchCheck() {
   for (const x of streams) lastSeen.set(x.name, now);
   if (!autoWatchReady) { autoWatchReady = true; return; }
   if (!fresh.length) return;
+  if (window.TelaoRemoteWant && fresh.includes(window.TelaoRemoteWant) && selected !== window.TelaoRemoteWant) { watch(window.TelaoRemoteWant); return; }
   const n = fresh[0];
   const busy = !!selected || !$('#junto').classList.contains('hidden');
   if (cfg.autoWatch !== false && !busy) { watch(n); toast(`${n} começou a transmitir: abrindo.`); }
@@ -318,7 +319,7 @@ async function watch(name) {
 function closePlayer() {
   selected = null;
   clearInterval(fbTimer);
-  marksWatch(null); setPointing(false); clipper.stop();
+  marksWatch(null); setPointing(false); clipper.stop(); remoteState(null);
   player.stop();
   show($('#player'), false);
   show($('#stage-empty'));
@@ -367,9 +368,36 @@ function marksWatch(name) {
   if (marksCh) api.ev.sub(marksCh);
 }
 api.ev.on((ev) => {
-  if (ev.ch === marksCh) marks.handle(ev);
+  if (ev.ch === marksCh && ev.type === 'ctlstate') remoteState(ev.data);
+  else if (ev.ch === marksCh) marks.handle(ev);
+  if (ev.type === 'ctl' && ev.ch === 'p:' + cfg.path && ev.from !== cfg.name && window.onRemoteCtl) window.onRemoteCtl(ev);
   else if (ev.ch === 'sala') onSalaEvent(ev);
 });
+/* ---------- controle remoto: quem abriu o site no navegador transmite; aqui dá para tocar/pausar/pular ---------- */
+let remoteT = null, remoteLast = null;
+const fmtT = (t) => { t = Math.max(0, Math.floor(t || 0)); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s2 = t % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s2).padStart(2, '0'); };
+function remoteState(d) {
+  clearTimeout(remoteT);
+  const bar = $('#remote-bar');
+  if (!d) { show(bar, false); remoteLast = null; return; }
+  remoteLast = d;
+  show(bar, true);
+  bar.classList.toggle('live', !!d.live);
+  $('#rb-play').textContent = d.paused ? '▶' : '❚❚';
+  $('#rb-time').textContent = d.live ? 'AO VIVO' : `${fmtT(d.time)} / ${fmtT(d.dur)}`;
+  const r = $('#rb-seek');
+  if (!r.matches(':active')) { r.max = String(Math.max(1, Math.floor(d.dur || 1))); r.value = String(Math.floor(d.time || 0)); }
+  remoteT = setTimeout(() => show(bar, false), 5000); // quem abriu o site parou de mandar: some
+}
+const sendCtl = (data) => { if (marksCh) api.ev.send({ ch: marksCh, type: 'ctl', data }); };
+$('#remote-bar').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-c]'); if (!b) return;
+  if (b.dataset.c === 'toggle') sendCtl({ cmd: 'toggle' });
+  if (b.dataset.c === 'back') sendCtl({ cmd: 'skip', by: -10 });
+  if (b.dataset.c === 'fwd') sendCtl({ cmd: 'skip', by: 10 });
+});
+$('#rb-seek').addEventListener('change', (e) => sendCtl({ cmd: 'seek', time: +e.target.value }));
+
 const sendMark = (type, data) => { if (marksCh) api.ev.send({ ch: marksCh, type, data }); };
 
 let pointing = false;
@@ -452,6 +480,7 @@ $('#btn-clip').addEventListener('click', takeClip);
 document.addEventListener('keydown', (e) => {
   if (!selected || e.target.closest('input, textarea, dialog') || e.ctrlKey || e.altKey || e.metaKey) return;
   if (e.key === 'p' || e.key === 'P') setPointing(!pointing);
+  if (e.code === 'Space' && remoteLast) { e.preventDefault(); sendCtl({ cmd: 'toggle' }); }
   if (e.key === 'c' || e.key === 'C') takeClip();
   if (e.key === 'Escape' && pointing) { setPointing(false); e.stopImmediatePropagation(); }
   const i = '123456'.indexOf(e.key);
