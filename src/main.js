@@ -26,6 +26,7 @@ const { createUpnp } = require('./upnp');
 const { createRoomProxy } = require('./roomproxy');
 const invites = require('./invite');
 const { createRoomEvents } = require('./roomevents');
+const webctl = require('./webctl');
 
 const PORTS = { webrtc: 8889, ice: 8189, api: 9997, apiInner: 9996 }; // 9997 = porteiro (roomproxy), 9996 = API do MediaMTX só por dentro
 const ROOM_USER = 'sala';
@@ -306,6 +307,8 @@ function registerIpc() {
   ipcMain.handle('ev:unsub', (_e, ch) => roomEv.unsub(String(ch)));
   ipcMain.handle('ev:send', (_e, ev) => roomEv.send({ ...ev, from: cfg.name }));
   ipcMain.handle('ev:now', () => roomEv.serverNow());
+  ipcMain.handle('web:probe', (_e, id) => webctl.probe(Number(id)));
+  ipcMain.handle('web:cmd', (_e, id, c) => webctl.command(Number(id), c));
   // clipe de quem assiste: salva em Vídeos\Telão
   ipcMain.handle('clip:save', async (_e, { data, ext, who }) => {
     const dir = path.join(app.getPath('videos'), 'Telão');
@@ -429,7 +432,14 @@ function createWindow() {
     title: 'Telão',
     icon: asset(process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, webviewTag: true },
+  });
+  // navegador embutido do "assistir junto": página comum, sem acesso nenhum ao app
+  win.webContents.on('will-attach-webview', (_e, prefs, params) => {
+    delete prefs.preload;
+    prefs.nodeIntegration = false; prefs.contextIsolation = true; prefs.sandbox = true; prefs.webSecurity = true;
+    params.partition = 'persist:junto';
+    if (!/^https?:\/\//.test(params.src || '')) _e.preventDefault();
   });
   win.loadURL('app://telao/index.html');
   win.on('leave-full-screen', () => send('win:fullscreen', false));
@@ -585,7 +595,16 @@ app.on('second-instance', (_e, argv) => {
 });
 if (process.platform === 'win32') app.setAppUserModelId('br.kaike.telao');
 
+// páginas do navegador embutido: sem janelas de anúncio, sem sair do site
+app.on('web-contents-created', (_e, wc) => { if (wc.getType() === 'webview') webctl.guard(wc); });
+
 app.whenReady().then(() => {
+  // o navegador embutido se apresenta como um Chrome comum (alguns sites recusam "Electron")
+  try {
+    const js = session.fromPartition('persist:junto');
+    js.setUserAgent(js.getUserAgent().replace(/\s(Electron|telao|Telao)\/\S+/gi, ''));
+    js.setPermissionRequestHandler((_wc, perm, cb) => cb(['fullscreen', 'autoplay'].includes(perm)));
+  } catch {}
   const root = path.join(__dirname, 'renderer');
   protocol.handle('app', async (req) => {
     const rel = decodeURIComponent(new URL(req.url).pathname).replace(/^\/+/, '') || 'index.html';

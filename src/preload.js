@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('telao', {
   ev: { sub: call('ev:sub'), unsub: call('ev:unsub'), send: call('ev:send'), now: call('ev:now'), on: on('ev:msg') },
   overlay: { onEvent: on('ov:ev') },
   clip: { save: call('clip:save'), show: call('clip:show') },
+  web: { probe: call('web:probe'), cmd: call('web:cmd') },
   net: { state: call('net:state'), retry: call('net:retry'), onState: on('net:state') },
   fw: { status: call('fw:status'), fix: call('fw:fix'), onState: on('fw:state') },
   upd: { state: call('upd:state'), check: call('upd:check'), relaunch: call('upd:relaunch'), onState: on('upd:state') },

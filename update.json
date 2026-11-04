@@ -1,8 +1,8 @@
 {
-  "version": "1.9.0",
+  "version": "1.10.0",
   "full": false,
   "download": "https://github.com/kaizenknt/telao#baixar",
-  "notes": "Assistir junto com Twitch, Vimeo, Kick e .m3u8, legenda e qualidade do vídeo, barras que somem sozinhas, contagem 3-2-1 para Netflix/Prime/Disney+ e abrir sozinho quando alguém começar a transmitir.",
+  "notes": "Assistir junto com qualquer link: o site abre dentro do Telão (Twitch, Kick, sites de filme…), o Telão acha o vídeo e sincroniza com todo mundo. Popups e redirecionamentos de anúncio são bloqueados.",
   "files": [
     "src/assets/icon.ico",
     "src/assets/icon.png",
@@ -27,6 +27,7 @@
     "src/roomproxy.js",
     "src/system.js",
     "src/upnp.js",
-    "src/version.js"
+    "src/version.js",
+    "src/webctl.js"
   ]
 }

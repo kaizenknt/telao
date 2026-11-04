@@ -18,18 +18,22 @@
       const start = t ? (+t[1] || 0) * 3600 + (+t[2] || 0) * 60 + (+t[3] || 0) : 0;
       return { kind: 'yt', id: m[1], pos: start };
     }
-    if ((m = url.match(/twitch\.tv\/videos\/(\d+)/i))) return { kind: 'twitch', id: m[1], pos: 0 };
-    if ((m = url.match(/twitch\.tv\/([A-Za-z0-9_]{3,25})(?:[/?#]|$)/i)) && !/^(videos|directory|settings|p|downloads)$/i.test(m[1])) return { kind: 'twitch', id: m[1].toLowerCase(), pos: 0 };
+
     if ((m = url.match(/vimeo\.com\/(?:video\/|channels\/[^/]+\/)?(\d{5,})/i))) return { kind: 'vimeo', id: m[1], pos: 0 };
-    if ((m = url.match(/kick\.com\/([A-Za-z0-9_-]{2,30})(?:[/?#]|$)/i))) return { kind: 'kick', id: m[1].toLowerCase(), pos: 0 };
+
     if (/^https?:\/\/\S+\.m3u8(\?\S*)?$/i.test(url)) return { kind: 'hls', src: url, pos: 0 };
     if (/^https?:\/\/\S+\.(mp4|webm|m4v|mov)(\?\S*)?$/i.test(url)) return { kind: 'file', src: url, pos: 0 };
     // sites com proteção de cópia: ninguém consegue embutir; fica a contagem regressiva
     if ((m = url.match(/(netflix|primevideo|amazon|disneyplus|max\.com|hbomax|globoplay|starplus|paramountplus|crunchyroll|apple\.com\/tv|tv\.apple)/i))) return { kind: 'drm', site: m[1] };
+    // qualquer outro site (Twitch, Kick, sites de filme…): abre a página no navegador embutido e acha o vídeo nela
+    if (/^https?:\/\/[^\s/]+\.[^\s/]+/i.test(url)) return { kind: 'web', src: url, pos: 0 };
+    if (/^[^\s/]+\.[a-z]{2,}(\/\S*)?$/i.test(url)) return { kind: 'web', src: 'https://' + url, pos: 0 };
     return null;
   }
-  const SITE = { yt: 'YouTube', twitch: 'Twitch', vimeo: 'Vimeo', kick: 'Kick', hls: 'transmissão', file: 'vídeo' };
+  const SITE = { yt: 'YouTube', twitch: 'Twitch', vimeo: 'Vimeo', kick: 'Kick', hls: 'transmissão', file: 'vídeo', web: 'site' };
   const BRIDGE = ['yt', 'twitch', 'vimeo', 'kick', 'hls'];
+  const KINDS = [...BRIDGE, 'file', 'web'];
+  const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return 'site'; } };
 
   // ---------- players (YouTube pela ponte no GitHub Pages; arquivo direto num <video>) ----------
   function bridgeMedia(box, s) {
@@ -70,6 +74,48 @@
     };
     return api_;
   }
+  /* ---------- qualquer site: a página aberta aqui dentro, o Telão acha o <video> dela ----------
+   * Cada um usa o player do próprio site (escolher servidor, legenda, qualidade, tela cheia). O Telão
+   * sincroniza tocar/pausar/posição: o que alguém fizer no player do site vale para todos.
+   */
+  function webMedia(box, src) {
+    const wv = document.createElement('webview');
+    wv.setAttribute('src', src);
+    wv.setAttribute('partition', 'persist:junto');
+    wv.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes');
+    box.appendChild(wv);
+    const st = { id: null, found: false, time: 0, dur: 0, paused: true, live: false, rs: 0, title: '' };
+    let pollT = null, failT = null, alive = true;
+    const cmd = (c) => { if (st.id) api.web.cmd(st.id, c).catch(() => {}); };
+    wv.addEventListener('dom-ready', () => {
+      try { st.id = wv.getWebContentsId(); } catch {}
+      if (!pollT) pollT = setInterval(async () => {
+        if (!alive || !st.id) return;
+        const r = await api.web.probe(st.id).catch(() => null);
+        if (!r || !alive) return;
+        if (r.found) {
+          const first = !st.found;
+          Object.assign(st, { found: true, time: r.time, dur: r.dur, paused: r.paused || r.ended, live: r.live, rs: r.rs });
+          if (first) { api_.onReady && api_.onReady(); api_.onFound && api_.onFound(true); }
+          api_.onTick && api_.onTick(st);
+        } else if (st.found) { st.found = false; api_.onFound && api_.onFound(false); }
+      }, 600);
+    });
+    wv.addEventListener('page-title-updated', (e) => { st.title = e.title; api_.onTitle && api_.onTitle(e.title); });
+    wv.addEventListener('did-fail-load', (e) => {
+      if (e.isMainFrame && e.errorCode !== -3) api_.onError && api_.onError(`Não consegui abrir ${hostOf(src)} (${e.errorDescription || 'erro ' + e.errorCode}).`);
+    });
+    failT = setTimeout(() => { if (!st.found && alive) api_.onFound && api_.onFound(false, true); }, 12000);
+    const api_ = {
+      play: () => cmd({ cmd: 'play' }), pause: () => cmd({ cmd: 'pause' }),
+      seek: (t) => { st.time = t; cmd({ cmd: 'seek', t }); }, volume: (v) => cmd({ cmd: 'volume', v }),
+      time: () => st.time, duration: () => st.dur, playing: () => !st.paused, ready: () => st.found,
+      live: () => st.live, noControl: () => false, web: true, raw: () => st,
+      destroy: () => { alive = false; clearInterval(pollT); clearTimeout(failT); wv.remove(); },
+    };
+    return api_;
+  }
+
   function fileMedia(box, src) {
     const v = document.createElement('video');
     v.src = src; v.playsInline = true; v.preload = 'auto';
@@ -85,20 +131,35 @@
     return api_;
   }
 
+  // ---------- player do site: perceber play/pausa/pulo feitos lá dentro ----------
+  let quietUntil = 0; // depois de um comando nosso, ignora as mudanças (foram nossas)
+  let prevSite = null; // última leitura do player do site
+  function webLocalChange(st) {
+    const s = J.state, prev = prevSite, nowMs = Date.now();
+    prevSite = { paused: st.paused, time: st.time, at: nowMs };
+    // só reage a uma MUDANÇA dentro do site (alguém clicou lá), nunca ao estado parado de quem acabou de entrar
+    if (!s || !prev || nowMs < quietUntil || st.rs < 2) return;
+    if (st.paused !== prev.paused) return publish({ playing: !st.paused, pos: st.time }, true); // play/pausa no site
+    const drift = st.time - (prev.time + (prev.paused ? 0 : (nowMs - prev.at) / 1000));
+    if (!st.live && Math.abs(drift) > 5) return publish({ pos: st.time }, true); // pulou no site
+  }
+
   // ---------- sincronizar ----------
   const expected = (s) => s.pos + (s.playing ? (now() - s.at) / 1000 : 0);
   function apply(tol = 1.2) {
     const s = J.state, m = J.media;
     if (!s || !m || !m.ready() || m.noControl()) return;
     const want = expected(s);
-    if (!m.live() && Math.abs(m.time() - want) > tol) m.seek(want); // ao vivo não tem como pular
-    if (s.playing && !m.playing()) m.play();
-    if (!s.playing && m.playing()) m.pause();
+    let did = false;
+    if (!m.live() && Math.abs(m.time() - want) > tol) { m.seek(want); did = true; } // ao vivo não tem como pular
+    if (s.playing && !m.playing()) { m.play(); did = true; }
+    if (!s.playing && m.playing()) { m.pause(); did = true; }
+    if (did) quietUntil = Date.now() + 2500;
   }
-  async function publish(patch) {
+  async function publish(patch, fromSite) {
     if (!J.state) return;
     J.state = { ...J.state, ...patch, at: now(), by2: cfg.name };
-    apply(0.3);
+    if (!fromSite) apply(0.3); else quietUntil = Date.now() + 1500;
     renderUi();
     await api.ev.send({ ch: 'sala', type: 'junto', data: J.state, sticky: true });
   }
@@ -110,7 +171,20 @@
     if (J.media) { J.media.destroy(); J.media = null; }
     box.textContent = '';
     const s = J.state;
-    J.media = BRIDGE.includes(s.kind) ? bridgeMedia(box, s) : fileMedia(box, s.src);
+    prevSite = null;
+    J.media = BRIDGE.includes(s.kind) ? bridgeMedia(box, s) : s.kind === 'web' ? webMedia(box, s.src) : fileMedia(box, s.src);
+    $('#junto').classList.toggle('web', s.kind === 'web');
+    show($('#junto-webhint'), s.kind === 'web');
+    $('#junto-webhint').textContent = 'Abra o vídeo e dê play no player do site (escolha servidor/legenda nele). O Telão acha o vídeo e sincroniza com todo mundo.';
+    if (J.media.web) {
+      J.media.onFound = (ok, late) => {
+        if (ok) { $('#junto-webhint').textContent = '✓ Achei o vídeo da página: tocar, pausar e pular agora valem para todos.'; setTimeout(() => show($('#junto-webhint'), false), 5000); }
+        else if (late) $('#junto-webhint').textContent = 'Ainda não achei o vídeo nesta página. Abra o filme/episódio e dê play uma vez no player do site.';
+        else { show($('#junto-webhint'), true); $('#junto-webhint').textContent = 'O vídeo sumiu da página (trocou de episódio ou de servidor?). Dê play de novo.'; }
+      };
+      // o que a pessoa fizer no player do próprio site vale para todos
+      J.media.onTick = (st) => webLocalChange(st);
+    }
     J.media.onReady = () => {
       J.media.volume(+$('#junto-vol').value); apply(0.3);
       // escolhas guardadas de legenda e qualidade
@@ -121,6 +195,7 @@
     J.media.onTitle = (t) => { if (J.state && !J.state.title && J.state.by === cfg.name) publish({ title: t }); };
     show($('#junto-err'), false);
     show($('#junto-cc'), BRIDGE.includes(s.kind) && s.kind !== 'kick'); show($('#junto-q'), BRIDGE.includes(s.kind) && s.kind !== 'kick');
+    if (s.kind === 'web') { show($('#junto-cc'), false); show($('#junto-q'), false); }
     closeMenus();
   }
 
@@ -205,7 +280,7 @@
     show(bar, !!s && !J.open);
     if (s) {
       $('#junto-bar-text').textContent = `${s.by} abriu ${s.title ? '“' + s.title + '”' : 'um vídeo'} para assistir junto`;
-      $('#junto-title').textContent = s.title || `Vídeo do ${SITE[s.kind] || 'site'}`;
+      $('#junto-title').textContent = s.title || (s.kind === 'web' ? hostOf(s.src) : `Vídeo do ${SITE[s.kind] || 'site'}`);
       $('#junto-by').textContent = `aberto por ${s.by}` + (s.by2 && s.by2 !== s.by ? ` · último controle: ${s.by2}` : '');
     }
     if (!J.open || !J.media) return;
@@ -221,7 +296,7 @@
 
   // ---------- eventos da sala ----------
   window.onSalaEvent = function (ev) {
-    if (ev.type === 'junto' && ev.data && (BRIDGE.includes(ev.data.kind) || ev.data.kind === 'file')) {
+    if (ev.type === 'junto' && ev.data && KINDS.includes(ev.data.kind)) {
       const prev = J.state;
       J.state = ev.data;
       if (J.open && !sameSource(prev, J.state)) mount();
@@ -273,7 +348,7 @@
   });
   $('#btn-junto-go').addEventListener('click', async () => {
     const p = parse($('#junto-url').value);
-    if (!p) { $('#junto-url-err').textContent = 'Não reconheci esse link. Funciona com YouTube, Twitch, Vimeo, Kick, transmissões .m3u8 e arquivos .mp4/.webm.'; show($('#junto-url-err'), true); return; }
+    if (!p) { $('#junto-url-err').textContent = 'Isso não parece um link. Cole o endereço da página do vídeo (começando com https://).'; show($('#junto-url-err'), true); return; }
     $('#dlg-junto').close();
     if (p.kind === 'drm') {
       const site = SITES[p.site.toLowerCase()] || 'esse site';
