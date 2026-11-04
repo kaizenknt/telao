@@ -15,7 +15,7 @@
     if (best) { require(_p.join(best, 'main.js')); return; }
   }
 }
-const { app, BrowserWindow, ipcMain, shell, clipboard, protocol, net, session, Tray, Menu, Notification, nativeImage, screen, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, clipboard, protocol, net, session, Tray, Menu, Notification, nativeImage, screen, dialog, desktopCapturer } = require('electron');
 const { pathToFileURL } = require('url');
 const path = require('path');
 const fs = require('fs');
@@ -36,7 +36,7 @@ let win = null;
 let quitting = false;
 const send = (ch, data) => {
   if (win && !win.isDestroyed()) win.webContents.send(ch, data);
-  if (ch === 'stream:state') syncOverlay(data);
+  if (ch === 'stream:state') { syncOverlay(data); syncThumbs(data); }
   if (ch === 'stream:state' || ch === 'host:state') updateTray();
   // janela fechada (modo leve): avisos importantes viram notificação do Windows
   if (!win && ch === 'stream:state' && data?.state === 'erro') notify('A transmissão parou', String(data.detail || '').split('\n')[0]);
@@ -308,6 +308,17 @@ function registerIpc() {
   ipcMain.handle('ev:unsub', (_e, ch) => roomEv.unsub(String(ch)));
   ipcMain.handle('ev:send', (_e, ev) => roomEv.send({ ...ev, from: cfg.name }));
   ipcMain.handle('ev:now', () => roomEv.serverNow());
+  // miniaturas de quem está ao vivo (vira "data:" para a interface)
+  ipcMain.handle('rooms:thumbs', async (_e, names) => {
+    const out = {};
+    await Promise.all((names || []).slice(0, 20).map(async (n) => {
+      try {
+        const r = await fetch(`http://${serverHost()}:${PORTS.api}/telao/thumb?path=${encodeURIComponent(n)}`, { headers: { Authorization: basicAuth() }, signal: AbortSignal.timeout(4000) });
+        if (r.ok) out[n] = 'data:image/jpeg;base64,' + Buffer.from(await r.arrayBuffer()).toString('base64');
+      } catch {}
+    }));
+    return out;
+  });
   ipcMain.handle('web:probe', (_e, id) => webctl.probe(Number(id)));
   ipcMain.handle('bl:status', () => ({ connected: browserLink.connected(), tabs: browserLink.tabs() }));
   ipcMain.handle('bl:cmd', (_e, tabId, frameId, c) => browserLink.command(Number(tabId), Number(frameId) || 0, c));
@@ -419,6 +430,28 @@ function installExtension() {
 /* Janela transparente por cima da tela que você está transmitindo: mostra onde os amigos apontam/desenham.
  * Fica fora da captura (proteção de conteúdo), então quem assiste não vê em dobro: cada um desenha no seu player. */
 let overlay = null, overlayCh = null;
+/* Miniatura da sua transmissão para os cartões dos amigos: uma foto pequena do que você está mostrando,
+ * a cada 12 s, só enquanto está ao vivo (no modo privado, só a janela do jogo). */
+let thumbT = null;
+async function sendThumb() {
+  try {
+    const src = engine && engine.currentSource ? engine.currentSource() : null;
+    if (!src || !(engine.state().state === 'ao-vivo')) return;
+    const id = src.captureHwnd ? `window:${src.captureHwnd}:0` : src.sourceId;
+    const list = await desktopCapturer.getSources({ types: [String(id).startsWith('screen') ? 'screen' : 'window'], thumbnailSize: { width: 480, height: 270 } });
+    const it = list.find((x) => x.id === id) || (String(id).startsWith('screen') ? list[0] : null);
+    if (!it || it.thumbnail.isEmpty()) return;
+    await fetch(`http://${serverHost()}:${PORTS.api}/telao/thumb?path=${encodeURIComponent(slug(cfg.name))}`, {
+      method: 'POST', headers: { Authorization: basicAuth(), 'Content-Type': 'image/jpeg' }, body: it.thumbnail.toJPEG(68), signal: AbortSignal.timeout(5000),
+    });
+  } catch {}
+}
+function syncThumbs(st) {
+  const live = st && st.state === 'ao-vivo';
+  if (live && !thumbT) { setTimeout(sendThumb, 2500); thumbT = setInterval(sendThumb, 12000); }
+  if (!live && st && ['parado', 'erro'].includes(st.state) && thumbT) { clearInterval(thumbT); thumbT = null; }
+}
+
 function syncOverlay(st) {
   const live = st && st.state === 'ao-vivo';
   if (live && !overlay && cfg.marksOverlay !== false) {

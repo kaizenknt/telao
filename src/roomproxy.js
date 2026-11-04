@@ -13,6 +13,7 @@ function createRoomProxy({ listenPort = 9997, targetPort = 9996, targetHost = '1
   const reports = new Map(); // "path\nviewer" -> { ...relato, t }
   const subs = new Map();    // canal -> Set(res)
   const sticky = new Map();  // canal -> último evento "fixo" (ex.: o vídeo que está passando no assistir junto)
+  const thumbs = new Map();  // transmissão -> { jpg, t } (miniatura de quem está ao vivo)
   const TTL = 12000;
   let server = null;
 
@@ -58,6 +59,27 @@ function createRoomProxy({ listenPort = 9997, targetPort = 9996, targetHost = '1
       const items = [...reports.values()].filter((r) => !path || r.path === path).map(({ t, ...r }) => ({ ...r, age: now - t }));
       return json(res, 200, { items });
     }
+    // ---- miniatura de quem está ao vivo (foto pequena do que está sendo transmitido) ----
+    if (url.pathname === '/telao/thumb') {
+      const path = clean(url.searchParams.get('path'), 80);
+      if (!path) return json(res, 400, { error: 'faltou path' });
+      if (req.method === 'POST') {
+        const parts = []; let size = 0;
+        req.on('data', (d) => { size += d.length; if (size > 400000) req.destroy(); else parts.push(d); });
+        req.on('end', () => {
+          const jpg = Buffer.concat(parts);
+          if (jpg[0] !== 0xff || jpg[1] !== 0xd8) return json(res, 400, { error: 'jpeg' });
+          thumbs.set(path, { jpg, t: now });
+          json(res, 200, { ok: true });
+        });
+        return;
+      }
+      const th = thumbs.get(path);
+      if (!th || now - th.t > 60000) return json(res, 404, { error: 'sem miniatura' });
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store', 'X-Telao-Age': String(now - th.t) });
+      return res.end(th.jpg);
+    }
+
     // ---- eventos ao vivo ----
     if (url.pathname === '/telao/ev' && req.method === 'GET') {
       const ch = clean(url.searchParams.get('ch'), 100);

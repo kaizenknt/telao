@@ -74,6 +74,10 @@
         <span id="junto-bar-text">Assistindo junto</span>
         <button class="btn small primary" id="junto-bar-go">Entrar</button>
       </div>
+      <div class="presence hidden" id="presence">
+        <div class="side-head"><h2>Na sala</h2><span class="count" id="presence-count">0</span></div>
+        <div class="p-list" id="presence-list"></div>
+      </div>
       <div class="side-head">
         <h2>Ao vivo</h2>
         <span class="count" id="live-count">0</span>
@@ -126,6 +130,7 @@
           <b id="junto-title">Vídeo</b>
           <small id="junto-by"></small>
           <div class="spacer"></div>
+          <button class="btn small web-only" id="junto-full2" title="Tela cheia (F)">Tela cheia</button>
           <button class="btn small" id="junto-leave" title="Sair (os outros continuam)">Sair</button>
           <button class="btn small danger" id="junto-end" title="Fechar o vídeo para todo mundo">Encerrar para todos</button>
         </div>
@@ -184,8 +189,8 @@
         <div class="point-hint hidden" id="point-hint">Clique para apontar · arraste para desenhar · Esc sai</div>
         <div class="loading hidden" id="loading"><div class="spin"></div><span id="loading-text">Conectando…</span></div>
         <div class="ov ov-top">
-          <span class="live-badge">AO VIVO</span>
-          <span class="who" id="who"></span>
+          <span class="avatar who-av" id="who-av"></span>
+          <span class="who-box"><span class="who-line"><b class="who" id="who"></b><span class="live-badge">AO VIVO</span></span><small class="who-meta" id="who-meta"></small></span>
           <span class="stats hidden" id="stats"></span>
         </div>
         <div class="ov ov-bottom">

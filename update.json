@@ -1,8 +1,8 @@
 {
-  "version": "1.11.0",
+  "version": "1.12.0",
   "full": false,
   "download": "https://github.com/kaizenknt/telao#baixar",
-  "notes": "Assistir junto \"só eu abro\": quem cola o link abre o site no próprio navegador (verificação \"sou humano\" funciona), o Telão transmite e os outros controlam tocar/pausar/pular pelo player.",
+  "notes": "Visual novo (prévia ao vivo de cada transmissão, quem está na sala, cabeçalho do player), barras que somem de verdade e controle remoto mais ágil.",
   "files": [
     "src/assets/icon.ico",
     "src/assets/icon.png",

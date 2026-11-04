@@ -355,13 +355,15 @@ body.full .banners { display: none; }
 .junto-current span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* assistir junto: qualquer site (navegador embutido) — barras fora do vídeo para não tampar o player do site */
-.junto.web { display: grid; grid-template-rows: auto 1fr auto; }
-.junto.web .junto-top, .junto.web .junto-ctrl { position: static; opacity: 1 !important; transform: none !important; pointer-events: auto !important; background: var(--panel); }
-.junto.web .junto-top { padding: 10px 16px; border-bottom: 1px solid var(--line); }
-.junto.web .junto-ctrl { padding: 10px 16px; border-top: 1px solid var(--line); }
-.junto.web .junto-stage { position: relative; }
+/* site aberto aqui dentro: a barra de cima fica por cima e some; a de baixo sai (o player do próprio site
+   controla e sincroniza com todos). No modo navegador (painel), as barras ficam fixas. */
 .junto.web .junto-cover { display: none; }
 .junto.web.idle { cursor: auto; }
+.junto.web.kind-web .junto-ctrl { display: none; }
+.junto.web.kind-browser, .junto.web.kind-remote { display: grid; grid-template-rows: auto 1fr auto; }
+.junto.web.kind-browser .junto-top, .junto.web.kind-browser .junto-ctrl,
+.junto.web.kind-remote .junto-top, .junto.web.kind-remote .junto-ctrl { position: static; opacity: 1 !important; transform: none !important; pointer-events: auto !important; background: var(--panel); }
+.junto.web.kind-browser .junto-stage, .junto.web.kind-remote .junto-stage { position: relative; }
 .junto-frame webview { position: absolute; inset: 0; width: 100%; height: 100%; display: flex; background: #000; }
 .junto-webhint { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 3; margin: 0; max-width: min(640px, 90%); text-align: center;
   background: #161412f2; border: 1px solid #ffb02e55; color: #f2ede6; padding: 9px 14px; border-radius: 10px; font-size: 13px; box-shadow: 0 10px 30px #0008; pointer-events: none; }
@@ -397,3 +399,67 @@ body.full .banners { display: none; }
 .ov-bottom { flex-wrap: wrap; row-gap: 10px; }
 .ov-bottom .remote-bar { order: -1; flex: 1 1 100%; max-width: none; margin: 0; min-width: 0; padding: 6px 10px; }
 .ov-bottom .remote-bar .rb-time { min-width: 110px; text-align: right; }
+.web-only { display: none; }
+.junto.kind-web .web-only { display: inline-flex; }
+
+/* =================== repaginada 1.12 =================== */
+/* miniatura (prévia ao vivo) — com foto ou, sem ela, um degradê com as iniciais */
+.s-thumb, .lc-thumb { position: relative; display: block; overflow: hidden; flex: none;
+  background: radial-gradient(120% 120% at 20% 10%, hsl(var(--h) 55% 34%), hsl(var(--h) 45% 12%) 70%); }
+.s-thumb img, .lc-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb-ini { position: absolute; inset: 0; display: grid; place-items: center; font: 800 13px var(--display); color: hsl(var(--h) 90% 88%); letter-spacing: .04em; }
+
+/* lista lateral */
+.stream { gap: 12px; padding: 7px 8px; }
+.s-thumb { width: 72px; height: 41px; border-radius: 8px; box-shadow: 0 0 0 1px #ffffff14 inset; }
+.stream.on .s-thumb { box-shadow: 0 0 0 2px var(--amber); }
+.stream:hover .s-thumb img { transform: scale(1.06); }
+.s-thumb img { transition: transform .3s ease; }
+
+/* quem está na sala */
+.presence { display: grid; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 2px; }
+.p-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px; }
+.p-av { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font: 800 11px var(--display);
+  background: hsl(var(--h) 45% 28%); color: hsl(var(--h) 90% 88%); box-shadow: 0 0 0 2px var(--panel); position: relative; cursor: default; }
+.p-av.live { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--live); }
+.p-av::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 2px var(--panel); }
+.p-more { font-size: 12px; color: var(--muted); align-self: center; padding-left: 2px; }
+
+/* cartões do palco: prévia 16:9 em cima, info embaixo */
+.stage-cards { gap: 18px; max-width: 980px; }
+.live-card { width: 290px; padding: 0; gap: 0; justify-items: stretch; text-align: left; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+.live-card:hover { transform: translateY(-4px); border-color: hsl(var(--h) 55% 45%); box-shadow: 0 18px 44px #000a, 0 0 0 1px hsl(var(--h) 55% 45% / .45); }
+.lc-thumb { aspect-ratio: 16 / 9; width: 100%; }
+.lc-thumb .thumb-ini { font-size: 30px; }
+.lc-thumb .live-badge { position: absolute; left: 10px; top: 10px; box-shadow: 0 2px 10px #0008; }
+.lc-viewers { position: absolute; right: 10px; top: 10px; background: #000a; backdrop-filter: blur(6px); color: #fff; font-size: 11.5px; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
+.lc-play { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; display: grid; place-items: center;
+  background: #000a; backdrop-filter: blur(6px); color: #fff; font-size: 18px; padding-left: 3px; opacity: 0; transform: scale(.85); transition: opacity .2s, transform .2s; }
+.live-card:hover .lc-play { opacity: 1; transform: none; }
+.lc-thumb::after { content: ""; position: absolute; inset: 0; background: linear-gradient(transparent 55%, #0007); pointer-events: none; }
+.lc-info { display: flex; align-items: center; gap: 10px; padding: 12px 14px 14px; }
+.lc-info .avatar { width: 34px; height: 34px; border-radius: 50%; font-size: 12px; }
+.lc-text { display: grid; min-width: 0; }
+.lc-text b { font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-text small { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* cabeçalho do player */
+.ov-top { gap: 12px; padding: 16px 18px 40px; }
+.who-av { width: 38px; height: 38px; border-radius: 50%; font-size: 13px; box-shadow: 0 0 0 2px #0006; }
+.who-box { display: grid; gap: 1px; min-width: 0; }
+.who-line { display: flex; align-items: center; gap: 8px; }
+.who-line .who { font-size: 16px; }
+.who-meta { color: #d8d1c8; font-size: 12px; text-shadow: 0 1px 4px #000; }
+
+/* barras de vidro por cima do vídeo */
+.ov-bottom { padding: 40px 18px 16px; }
+.tool-btn, .react-bar, .remote-bar, .jc-btn.icon { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.tool-btn { background: #0006; }
+.react-bar { background: #0006; }
+.ov .icon-btn { backdrop-filter: blur(10px); background: #0004; }
+.ov .icon-btn:hover { background: #ffffff22; }
+
+/* palco vazio mais vivo */
+.stage-empty h1 { font-size: 30px; letter-spacing: -.01em; }
+.stage-empty p { font-size: 14.5px; }

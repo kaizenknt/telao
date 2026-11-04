@@ -209,7 +209,7 @@
       $('#jb-s4 span').textContent = R.streaming && stState.state === 'ao-vivo' ? 'Transmitindo para a sala: os outros assistem e controlam pelo Telão' : 'Vai transmitir a janela do navegador quando o vídeo aparecer';
       if (st.found && st.tab && !(R.streaming && ['ao-vivo', 'iniciando'].includes(stState.state))) startRemoteStream(st.tab);
       if (st.found) api.ev.send({ ch: R.ch, type: 'ctlstate', data: { time: st.time, dur: st.dur, paused: st.paused, live: st.live || st.noSeek, site: hostOf(J.state.src), title: st.tab && st.tab.title } });
-    }, 1000);
+    }, 500); // 2x por segundo: a barra de quem controla fica em dia
   }
   function remoteHostStop() {
     clearInterval(R.ctlT);
@@ -278,6 +278,7 @@
     prevSite = null;
     J.media = BRIDGE.includes(s.kind) ? bridgeMedia(box, s) : s.kind === 'web' ? webMedia(box, s.src) : (s.kind === 'browser' || s.kind === 'remote') ? browserMedia(box, s.src) : fileMedia(box, s.src);
     $('#junto').classList.toggle('web', s.kind === 'web' || s.kind === 'browser' || s.kind === 'remote');
+    for (const k of ['web', 'browser', 'remote']) $('#junto').classList.toggle('kind-' + k, s.kind === k);
     show($('#jb-s4'), s.kind === 'remote');
     $('#jb-title').innerHTML = '';
     $('#jb-title').append(s.kind === 'remote' ? 'Abrindo ' : 'Assistindo ', Object.assign(document.createElement('b'), { textContent: hostOf(s.src) }), s.kind === 'remote' ? ' no seu navegador' : ' no navegador de cada um');
@@ -358,14 +359,19 @@
     j.classList.remove('idle');
     clearTimeout(idleT);
     idleT = setTimeout(() => {
-      // não esconde com um menu aberto ou com o mouse em cima das barras
-      if (document.querySelector('.jmenu:not(.hidden)') || j.querySelector('.junto-top:hover, .junto-ctrl:hover')) return wake();
+      // some depois de 3 s parado (mesmo com o mouse em cima); só fica com um menu aberto ou arrastando a posição
+      if (document.querySelector('.jmenu:not(.hidden)') || j.querySelector('input[type=range]:active')) return wake();
       j.classList.add('idle');
-    }, 2800);
+    }, 3000);
   }
   $('#junto').addEventListener('mousemove', wake);
+  $('#junto').addEventListener('mousedown', wake);
+  // site aberto aqui dentro: o mouse em cima da página não chega como evento comum; o app avisa por aqui.
+  // Só acorda a barra de cima quando o mouse chega perto do topo (embaixo ficam os controles do próprio site).
+  api.web.onMouse((m) => { if (J.open && m && m.y < 90) wake(); });
   $('#junto').addEventListener('mouseleave', () => { clearTimeout(idleT); idleT = setTimeout(() => $('#junto').classList.add('idle'), 800); });
   $('#junto-full').addEventListener('click', () => { if (typeof toggleFull === 'function') toggleFull(); });
+  $('#junto-full2').addEventListener('click', () => { if (typeof toggleFull === 'function') toggleFull(); });
   function openJunto() {
     if (!J.state) return;
     if (J.state.kind === 'remote' && J.state.host !== cfg.path) {

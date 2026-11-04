@@ -138,11 +138,28 @@ function autoWatchCheck() {
 }
 
 let lastStreamsKey = '';
+/* miniaturas de quem está ao vivo (foto que o próprio Telão de cada um manda a cada ~12 s) */
+let thumbs = {};
+async function refreshThumbs() {
+  if (!streams.length) { thumbs = {}; return; }
+  try { const t = await api.rooms.thumbs(streams.map((x) => x.name)); thumbs = t || {}; lastStreamsKey = ''; renderStreams(); } catch {}
+}
+setInterval(refreshThumbs, 12000);
+
+function thumbBox(name, cls) {
+  const el = document.createElement('span');
+  el.className = cls; el.style.setProperty('--h', hue(name));
+  if (thumbs[name]) { const img = new Image(); img.src = thumbs[name]; img.alt = ''; el.appendChild(img); el.classList.add('has'); }
+  else { const a = document.createElement('span'); a.className = 'thumb-ini'; a.textContent = initials(name); el.appendChild(a); }
+  return el;
+}
+
 function renderStreams() {
   const ul = $('#streams');
   // só redesenha a lista quando algo mudou (redesenhar no meio de um clique fazia o clique se perder)
-  const key = JSON.stringify([selected, streams.map((s) => [s.name, s.viewers, ago(s.since)])]);
+  const key = JSON.stringify([selected, streams.map((s) => [s.name, s.viewers, ago(s.since), !!thumbs[s.name] && thumbs[s.name].length])]);
   if (key === lastStreamsKey && ul.childElementCount === streams.length) return;
+  const newNames = streams.map((x) => x.name).filter((n) => !(n in thumbs));
   lastStreamsKey = key;
   ul.textContent = '';
   $('#live-count').textContent = streams.length;
@@ -151,24 +168,24 @@ function renderStreams() {
     const mine = s.name === cfg.path;
     const li = document.createElement('li');
     li.className = 'stream' + (s.name === selected ? ' on' : '');
-    li.innerHTML = `
-      <span class="avatar" style="--h:${hue(s.name)}"></span>
-      <span class="s-main"><b></b><small></small></span>
-      <span class="live-dot" title="Ao vivo"></span>`;
-    li.querySelector('.avatar').textContent = initials(s.name);
+    li.appendChild(thumbBox(s.name, 's-thumb'));
+    li.insertAdjacentHTML('beforeend', `<span class="s-main"><b></b><small></small></span><span class="live-dot" title="Ao vivo"></span>`);
     li.querySelector('b').textContent = s.name + (mine ? ' (você)' : '');
     li.querySelector('small').textContent = `${s.viewers} assistindo · ${ago(s.since)}`;
     li.addEventListener('click', () => watch(s.name));
     ul.appendChild(li);
   }
   renderStageCards();
+  if (newNames.length) setTimeout(refreshThumbs, 300);
   // a transmissão que eu assistia acabou
   if (selected && lastPollOk && !streams.find((s) => s.name === selected)) {
     $('#loading-text').textContent = `${selected} parou de transmitir. Esperando voltar…`;
   }
+  const cur = streams.find((x) => x.name === selected);
+  if (cur) $('#who-meta').textContent = `${cur.viewers} assistindo · ao vivo há ${ago(cur.since)}`;
 }
 
-/* palco vazio: cartões grandes de quem está ao vivo (um clique para assistir) */
+/* palco vazio: cartões grandes de quem está ao vivo, com a prévia do que cada um está mostrando */
 function renderStageCards() {
   const grid = $('#stage-cards');
   const any = streams.length > 0;
@@ -181,17 +198,53 @@ function renderStageCards() {
     const b = document.createElement('button');
     b.className = 'live-card';
     b.style.setProperty('--h', hue(s.name));
-    b.innerHTML = `<span class="lc-top"><span class="live-badge">AO VIVO</span><span class="lc-time"></span></span>
-      <span class="avatar big"></span><b></b><small></small><span class="lc-cta"></span>`;
-    b.querySelector('.lc-time').textContent = ago(s.since);
+    const th = thumbBox(s.name, 'lc-thumb');
+    th.insertAdjacentHTML('beforeend', `<span class="live-badge">AO VIVO</span><span class="lc-viewers"></span><span class="lc-play">▶</span>`);
+    th.querySelector('.lc-viewers').textContent = `👁 ${s.viewers}`;
+    b.appendChild(th);
+    b.insertAdjacentHTML('beforeend', `<span class="lc-info"><span class="avatar"></span><span class="lc-text"><b></b><small></small></span></span>`);
     b.querySelector('.avatar').textContent = initials(s.name);
     b.querySelector('b').textContent = s.name + (mine ? ' (você)' : '');
-    b.querySelector('small').textContent = `${s.viewers} assistindo`;
-    b.querySelector('.lc-cta').textContent = mine ? 'Ver como está saindo' : 'Assistir';
+    b.querySelector('small').textContent = mine ? `você · ${ago(s.since)} · ver como está saindo` : `ao vivo há ${ago(s.since)}`;
     b.addEventListener('click', () => watch(s.name));
     grid.appendChild(b);
   }
 }
+
+/* ---------- quem está na sala (com o Telão aberto, transmitindo ou não) ---------- */
+const present = new Map(); // nome -> { at, live }
+function sayHere() { if (cfg && cfg.name) api.ev.send({ ch: 'sala', type: 'here', data: { live: stState.state === 'ao-vivo', path: cfg.path } }).catch(() => {}); }
+setInterval(sayHere, 15000);
+setTimeout(sayHere, 1500);
+function onHere(ev) {
+  if (!ev.from) return;
+  const isNew = !present.has(ev.from);
+  present.set(ev.from, { at: Date.now(), live: !!(ev.data && ev.data.live) });
+  if (isNew && ev.from !== cfg.name) sayHere(); // quem acabou de entrar já fica sabendo de mim
+  renderPresence();
+}
+function renderPresence() {
+  const now = Date.now();
+  for (const [n, p] of present) if (now - p.at > 40000) present.delete(n);
+  if (cfg && cfg.name && !present.has(cfg.name)) present.set(cfg.name, { at: now, live: stState.state === 'ao-vivo' });
+  const box = $('#presence'), list = $('#presence-list');
+  const names = [...present.keys()].sort((a, b) => (a === cfg.name ? -1 : b === cfg.name ? 1 : a.localeCompare(b)));
+  $('#presence-count').textContent = names.length;
+  show(box, names.length > 0);
+  list.textContent = '';
+  for (const n of names.slice(0, 12)) {
+    const p = present.get(n);
+    const el = document.createElement('span');
+    el.className = 'p-av' + (p.live || streams.some((x) => x.name === n || x.name === slugish(n)) ? ' live' : '');
+    el.style.setProperty('--h', hue(n));
+    el.textContent = initials(n);
+    el.title = n + (n === cfg.name ? ' (você)' : '') + (el.classList.contains('live') ? ' · ao vivo' : '');
+    list.appendChild(el);
+  }
+  if (names.length > 12) { const more = document.createElement('span'); more.className = 'p-more'; more.textContent = '+' + (names.length - 12); list.appendChild(more); }
+}
+const slugish = (n) => String(n).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+setInterval(renderPresence, 10000);
 
 /* ---------- player ---------- */
 const video = $('#video');
@@ -303,6 +356,8 @@ async function watch(name) {
   show($('#stage-empty'), false);
   show($('#player'));
   $('#who').textContent = name;
+  $('#who-av').textContent = initials(name); $('#who-av').style.setProperty('--h', hue(name));
+  $('#who-meta').textContent = '';
   // assistindo a si mesmo: começa mudo para não dar eco
   video.muted = name === cfg.path; renderVol();
   renderStreams();
@@ -371,25 +426,48 @@ api.ev.on((ev) => {
   if (ev.ch === marksCh && ev.type === 'ctlstate') remoteState(ev.data);
   else if (ev.ch === marksCh) marks.handle(ev);
   if (ev.type === 'ctl' && ev.ch === 'p:' + cfg.path && ev.from !== cfg.name && window.onRemoteCtl) window.onRemoteCtl(ev);
+  else if (ev.ch === 'sala' && ev.type === 'here') onHere(ev);
   else if (ev.ch === 'sala') onSalaEvent(ev);
 });
 /* ---------- controle remoto: quem abriu o site no navegador transmite; aqui dá para tocar/pausar/pular ---------- */
-let remoteT = null, remoteLast = null;
+let remoteT = null, remoteLast = null, remoteAt = 0, remoteHold = 0, remoteTick = null;
 const fmtT = (t) => { t = Math.max(0, Math.floor(t || 0)); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s2 = t % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s2).padStart(2, '0'); };
+// desenha a barra; entre uma atualização e outra o relógio anda sozinho (fica liso)
+function drawRemote() {
+  const d = remoteLast; if (!d) return;
+  const t = d.paused || d.live ? d.time : d.time + (performance.now() - remoteAt) / 1000;
+  $('#rb-play').textContent = d.paused ? '▶' : '❚❚';
+  $('#rb-time').textContent = d.live ? 'AO VIVO' : `${fmtT(t)} / ${fmtT(d.dur)}`;
+  const r = $('#rb-seek');
+  if (!r.matches(':active')) { r.max = String(Math.max(1, Math.floor(d.dur || 1))); r.value = String(Math.floor(t)); }
+}
 function remoteState(d) {
   clearTimeout(remoteT);
   const bar = $('#remote-bar');
-  if (!d) { show(bar, false); remoteLast = null; return; }
-  remoteLast = d;
+  if (!d) { show(bar, false); remoteLast = null; clearInterval(remoteTick); remoteTick = null; return; }
+  // logo depois de um clique daqui, vale o que foi clicado (a confirmação ainda está a caminho)
+  if (performance.now() < remoteHold && remoteLast) { remoteLast = { ...d, paused: remoteLast.paused, time: remoteLast.paused === d.paused ? d.time : remoteLast.time }; }
+  else remoteLast = d;
+  remoteAt = performance.now();
   show(bar, true);
   bar.classList.toggle('live', !!d.live);
-  $('#rb-play').textContent = d.paused ? '▶' : '❚❚';
-  $('#rb-time').textContent = d.live ? 'AO VIVO' : `${fmtT(d.time)} / ${fmtT(d.dur)}`;
-  const r = $('#rb-seek');
-  if (!r.matches(':active')) { r.max = String(Math.max(1, Math.floor(d.dur || 1))); r.value = String(Math.floor(d.time || 0)); }
-  remoteT = setTimeout(() => show(bar, false), 5000); // quem abriu o site parou de mandar: some
+  drawRemote();
+  if (!remoteTick) remoteTick = setInterval(drawRemote, 250);
+  remoteT = setTimeout(() => remoteState(null), 5000); // quem abriu o site parou de mandar: some
 }
-const sendCtl = (data) => { if (marksCh) api.ev.send({ ch: marksCh, type: 'ctl', data }); };
+const sendCtl = (data) => {
+  if (!marksCh) return;
+  api.ev.send({ ch: marksCh, type: 'ctl', data });
+  // resposta na hora, sem esperar a volta
+  if (remoteLast) {
+    const cur = remoteLast.paused || remoteLast.live ? remoteLast.time : remoteLast.time + (performance.now() - remoteAt) / 1000;
+    if (data.cmd === 'toggle') remoteLast = { ...remoteLast, paused: !remoteLast.paused, time: cur };
+    if (data.cmd === 'skip') remoteLast = { ...remoteLast, time: Math.max(0, cur + data.by) };
+    if (data.cmd === 'seek') remoteLast = { ...remoteLast, time: data.time };
+    remoteAt = performance.now(); remoteHold = performance.now() + 1200;
+    drawRemote();
+  }
+};
 $('#remote-bar').addEventListener('click', (e) => {
   const b = e.target.closest('[data-c]'); if (!b) return;
   if (b.dataset.c === 'toggle') sendCtl({ cmd: 'toggle' });
@@ -492,12 +570,13 @@ let idleT;
 function wakePlayer() {
   $('#player').classList.remove('idle');
   clearTimeout(idleT); idleT = setTimeout(() => {
-    // com o mouse em cima da barra, ela fica
-    if ($('#player').querySelector('.ov:hover')) return wakePlayer();
+    // some depois de 3 s parado, mesmo com o mouse em cima da barra; só fica enquanto arrasta a posição/volume
+    if ($('#player').querySelector('input[type=range]:active')) return wakePlayer();
     $('#player').classList.add('idle');
-  }, 2500);
+  }, 3000);
 }
 $('#player').addEventListener('mousemove', wakePlayer);
+$('#player').addEventListener('mousedown', wakePlayer);
 $('#player').addEventListener('mouseleave', () => { clearTimeout(idleT); idleT = setTimeout(() => $('#player').classList.add('idle'), 800); });
 
 /* ---------- transmissão (motor próprio) ---------- */

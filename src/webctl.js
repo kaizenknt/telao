@@ -78,6 +78,13 @@ function guard(wc) {
   // a página principal não pode ir para outro site (clique em anúncio); os players dentro dela podem
   wc.on('will-navigate', (e, url) => { if (offSite(e.url || url)) e.preventDefault(); });
   wc.on('will-redirect', (e, url) => { if ((e.isMainFrame ?? true) && offSite(e.url || url)) e.preventDefault(); });
+  // avisa a janela do Telão quando o mouse mexe em cima da página (para as barras aparecerem/sumirem)
+  let lastMove = 0;
+  wc.on('input-event', (_e, ie) => {
+    if (ie.type !== 'mouseMove' || Date.now() - lastMove < 150) return;
+    lastMove = Date.now();
+    try { wc.hostWebContents && wc.hostWebContents.send('web:mouse', { x: ie.x, y: ie.y }); } catch {}
+  });
   wc.on('destroyed', () => chosen.delete(wc.id));
 }
 

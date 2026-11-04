@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('telao', {
     invite: call('host:invite'), inviteFor: call('host:inviteFor'), remember: call('invite:remember'),
     onState: on('host:state'), onLog: on('host:log'),
   },
-  rooms: { list: call('rooms:list'), feedback: call('rooms:feedback') },
+  rooms: { list: call('rooms:list'), feedback: call('rooms:feedback'), thumbs: call('rooms:thumbs') },
   stream: {
     sources: call('stream:sources'), start: call('stream:start'), stop: call('stream:stop'), state: call('stream:state'),
     qualities: call('stream:qualities'), diagnose: call('stream:diagnose'), openLog: call('stream:openLog'),
@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('telao', {
   ev: { sub: call('ev:sub'), unsub: call('ev:unsub'), send: call('ev:send'), now: call('ev:now'), on: on('ev:msg') },
   overlay: { onEvent: on('ov:ev') },
   clip: { save: call('clip:save'), show: call('clip:show') },
-  web: { probe: call('web:probe'), cmd: call('web:cmd') },
+  web: { probe: call('web:probe'), cmd: call('web:cmd'), onMouse: on('web:mouse') },
   bl: { status: call('bl:status'), cmd: call('bl:cmd'), focus: call('bl:focus'), open: call('bl:open'), install: call('bl:install'), onTabs: on('bl:tabs') },
   net: { state: call('net:state'), retry: call('net:retry'), onState: on('net:state') },
   fw: { status: call('fw:status'), fix: call('fw:fix'), onState: on('fw:state') },
