@@ -113,8 +113,27 @@ async function poll() {
     if (selected && !streams.some((x) => x.name === selected)) {
       if (++goneCount >= 3) { const n = selected; closePlayer(); toast(`${n} saiu do ar.`); }
     } else goneCount = 0;
+    autoWatchCheck();
   }
   renderStreams();
+}
+
+/* ---------- abrir sozinho quando alguém começa a transmitir ----------
+ * Só para transmissões que COMEÇAM com o app aberto (não abre nada ao ligar o Telão). Uma queda rápida
+ * (menos de 30 s fora do ar) não conta como começo novo.
+ */
+const lastSeen = new Map();
+let autoWatchReady = false;
+function autoWatchCheck() {
+  const now = Date.now();
+  const fresh = streams.map((x) => x.name).filter((n) => n !== cfg.path && (!lastSeen.has(n) || now - lastSeen.get(n) > 30000));
+  for (const x of streams) lastSeen.set(x.name, now);
+  if (!autoWatchReady) { autoWatchReady = true; return; }
+  if (!fresh.length) return;
+  const n = fresh[0];
+  const busy = !!selected || !$('#junto').classList.contains('hidden');
+  if (cfg.autoWatch !== false && !busy) { watch(n); toast(`${n} começou a transmitir: abrindo.`); }
+  else if (selected !== n) toastAction(`${n} começou a transmitir.`, 'Assistir', () => watch(n), 9000);
 }
 
 let lastStreamsKey = '';
@@ -292,6 +311,7 @@ async function watch(name) {
   await playLayer(name, startLight ? 'leve' : 'main');
   startFeedback(name);
   marksWatch(name);
+  wakePlayer(); // barras aparecem e somem sozinhas depois de alguns segundos
   clipper.stop();
 }
 
@@ -440,10 +460,16 @@ document.addEventListener('keydown', (e) => {
 
 // esconde os controles quando o mouse fica parado
 let idleT;
-$('#player').addEventListener('mousemove', () => {
+function wakePlayer() {
   $('#player').classList.remove('idle');
-  clearTimeout(idleT); idleT = setTimeout(() => $('#player').classList.add('idle'), 2500);
-});
+  clearTimeout(idleT); idleT = setTimeout(() => {
+    // com o mouse em cima da barra, ela fica
+    if ($('#player').querySelector('.ov:hover')) return wakePlayer();
+    $('#player').classList.add('idle');
+  }, 2500);
+}
+$('#player').addEventListener('mousemove', wakePlayer);
+$('#player').addEventListener('mouseleave', () => { clearTimeout(idleT); idleT = setTimeout(() => $('#player').classList.add('idle'), 800); });
 
 /* ---------- transmissão (motor próprio) ---------- */
 function renderStream() {
@@ -732,6 +758,7 @@ $('#btn-settings').addEventListener('click', async () => {
   form.privateCapture.checked = cfg.privateCapture !== false;
   form.clips.checked = cfg.clips !== false;
   form.marksOverlay.checked = cfg.marksOverlay !== false;
+  form.autoWatch.checked = cfg.autoWatch !== false;
   form.startWithWindows.checked = !!cfg.startWithWindows;
   show($('#settings-error'), false);
   syncModeFields();
@@ -758,7 +785,7 @@ form.addEventListener('submit', async (e) => {
     name: form.name.value.trim(), hosting: host, server: form.server.value.trim(),
     password: form.password.value,
     closeToTray: form.closeToTray.checked, notifyLive: form.notifyLive.checked, autoFps: form.autoFps.checked,
-    privateCapture: form.privateCapture.checked, clips: form.clips.checked, marksOverlay: form.marksOverlay.checked, startWithWindows: form.startWithWindows.checked,
+    privateCapture: form.privateCapture.checked, clips: form.clips.checked, marksOverlay: form.marksOverlay.checked, autoWatch: form.autoWatch.checked, startWithWindows: form.startWithWindows.checked,
   });
   $('#dlg-settings').close();
   renderMe(); renderHost();

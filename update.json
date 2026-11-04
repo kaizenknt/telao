@@ -1,8 +1,8 @@
 {
-  "version": "1.8.0",
+  "version": "1.9.0",
   "full": false,
   "download": "https://github.com/kaizenknt/telao#baixar",
-  "notes": "Qualidade por pessoa (versão leve 720p só para quem tem internet fraca), modo privado em jogo, apontar/desenhar na tela, reações, clipe de quem assiste e assistir junto (YouTube sincronizado).",
+  "notes": "Assistir junto com Twitch, Vimeo, Kick e .m3u8, legenda e qualidade do vídeo, barras que somem sozinhas, contagem 3-2-1 para Netflix/Prime/Disney+ e abrir sozinho quando alguém começar a transmitir.",
   "files": [
     "src/assets/icon.ico",
     "src/assets/icon.png",

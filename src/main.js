@@ -53,7 +53,8 @@ const DEFAULTS = {
   av1Bad: false,
   privateCapture: true, // com jogo em tela cheia, transmite só a janela do jogo (notificações não vazam)
   clips: true,          // quem assiste pode salvar o último meio minuto
-  marksOverlay: true,   // mostrar na sua tela onde os amigos apontam/desenham     // este PC já mostrou que não dá conta de abrir AV1 // troca sozinho para menos FPS/resolução quando o jogo ou o codificador não dá conta (igual o Discord) // VPN que o host escolheu por último para os convites (ex.: "Hamachi")
+  marksOverlay: true,
+  autoWatch: true,      // abrir sozinho a transmissão de quem começar (com o app aberto)   // mostrar na sua tela onde os amigos apontam/desenham     // este PC já mostrou que não dá conta de abrir AV1 // troca sozinho para menos FPS/resolução quando o jogo ou o codificador não dá conta (igual o Discord) // VPN que o host escolheu por último para os convites (ex.: "Hamachi")
 };
 function loadCfg() {
   try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; }
@@ -536,7 +537,8 @@ async function trayPoll() {
     for (const n of liveNow) {
       const isNew = !knownLive.includes(n);
       const looking = win && win.isFocused();
-      if (isNew && n !== me && cfg.notifyLive && !looking) {
+      // com a janela aberta, a própria interface abre sozinha (opção "abrir sozinho"); aqui só avisa
+      if (isNew && n !== me && cfg.notifyLive && !looking && !(win && cfg.autoWatch !== false)) {
         notify(`${n} está ao vivo`, 'Clique para assistir.', () => showWindow(n));
       }
     }

@@ -141,6 +141,20 @@
           <input type="range" id="junto-seek" min="0" max="1" value="0" step="1" aria-label="Posição" />
           <span class="junto-time" id="junto-time">0:00 / 0:00</span>
           <input type="range" id="junto-vol" min="0" max="1" step="0.01" value="0.8" aria-label="Volume" />
+          <div class="jm-wrap">
+            <button class="jc-btn icon" id="junto-cc" title="Legenda (C)">CC</button>
+            <div class="jmenu hidden" id="jm-cc"></div>
+          </div>
+          <div class="jm-wrap">
+            <button class="jc-btn icon" id="junto-q" title="Qualidade do vídeo (só para você)">
+              <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Zm7.4-2.5a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1L11 21h4l.4-2.6c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.2-1.6Z"/></svg>
+              <span>Auto</span>
+            </button>
+            <div class="jmenu hidden" id="jm-q"></div>
+          </div>
+          <button class="jc-btn icon" id="junto-full" title="Tela cheia (F)">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 4h6v2H6v4H4V4Zm10 0h6v6h-2V6h-4V4ZM4 14h2v4h4v2H4v-6Zm14 0h2v6h-6v-2h4v-4Z"/></svg>
+          </button>
         </div>
       </section>
 
@@ -188,11 +202,24 @@
   </div>
 
   <!-- ============ Convite ============ -->
+  <div class="countdown hidden" id="countdown" aria-live="assertive">
+    <small id="cd-site"></small>
+    <div class="cd-num" id="cd-num">3</div>
+    <p id="cd-msg"></p>
+  </div>
+
   <dialog id="dlg-junto" class="dlg">
     <h2>Assistir junto</h2>
-    <p class="muted">Cole o link de um vídeo do YouTube. Ele toca no PC de cada um, sincronizado: quando alguém pausa ou pula, pausa e pula para todos. Não gasta a sua internet e não fica com tela preta.</p>
-    <label class="field"><span>Link do vídeo</span><input id="junto-url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" spellcheck="false" /></label>
+    <p class="muted">Cole o link. O vídeo toca no PC de cada um, sincronizado: quando alguém pausa ou pula, pausa e pula para todos. Não gasta a sua internet e não fica com tela preta.</p>
+    <div class="junto-current hidden" id="junto-current"><span id="junto-current-text"></span><button class="btn small primary" id="junto-current-go">Voltar para o vídeo</button></div>
+    <div class="sites"><span>YouTube</span><span>Twitch</span><span>Vimeo</span><span>Kick (ao vivo)</span><span>.m3u8</span><span>.mp4 / .webm</span></div>
+    <label class="field"><span>Link do vídeo</span><input id="junto-url" placeholder="Cole aqui o link (YouTube, Twitch, Vimeo…)" autocomplete="off" spellcheck="false" /></label>
     <p class="error hidden" id="junto-url-err"></p>
+    <div class="drm-box">
+      <b>Netflix, Prime Video, Disney+, Max, Globoplay…</b>
+      <span>Esses sites têm proteção de cópia e não deixam ninguém embutir o vídeo. Cada um abre no próprio navegador e o Telão faz uma contagem 3-2-1 ao mesmo tempo para todos darem play juntos.</span>
+      <button class="btn small" id="btn-countdown">Fazer contagem para todos</button>
+    </div>
     <div class="dlg-actions"><button class="btn" data-close>Cancelar</button><button class="btn primary" id="btn-junto-go">Abrir para todos</button></div>
   </dialog>
 
@@ -291,6 +318,7 @@
 
       <h3 class="sub">Modo leve</h3>
       <label class="check"><input type="checkbox" name="closeToTray" /> <span><b>Fechar vai para a bandeja</b><small>Ao fechar a janela, o Telão some e fica perto do relógio gastando quase nada. A sala e o botão de transmitir continuam lá.</small></span></label>
+      <label class="check"><input type="checkbox" name="autoWatch" /> <span><b>Abrir sozinho quando alguém começar a transmitir</b><small>Com o Telão aberto, a transmissão nova aparece na hora, sem precisar clicar. Se você já estiver assistindo alguém, só avisa.</small></span></label>
       <label class="check"><input type="checkbox" name="privateCapture" /> <span><b>Modo privado em jogo</b><small>Transmitindo uma tela com jogo em tela cheia, mostra só a janela do jogo: notificações do WhatsApp/Discord e outras janelas não aparecem.</small></span></label>
       <label class="check"><input type="checkbox" name="clips" /> <span><b>Clipes de quem assiste</b><small>Guarda sempre o último meio minuto do que você está vendo; aperte C ou "Clipe" para salvar em Vídeos\Telão.</small></span></label>
       <label class="check"><input type="checkbox" name="marksOverlay" /> <span><b>Ver na minha tela onde os amigos apontam</b><small>Enquanto você transmite, os toques e desenhos deles aparecem por cima da sua tela (só para você; não entram na transmissão).</small></span></label>

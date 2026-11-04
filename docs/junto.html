@@ -7,45 +7,193 @@
 <title>Telão · assistir junto</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  #p { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #p, #p iframe, video { position: absolute; inset: 0; width: 100% !important; height: 100% !important; border: 0; }
+  video { object-fit: contain; background: #000; }
 </style>
 </head>
 <body>
-<!-- Ponte entre o Telão e o player do YouTube: o app manda comandos (tocar, pausar, pular) e recebe o estado.
-     Fica no GitHub Pages porque o YouTube só toca vídeos incorporados em páginas com endereço de verdade. -->
+<!-- Ponte entre o Telão e os players de vídeo (YouTube, Twitch, Vimeo, Kick, transmissões .m3u8).
+     O app manda comandos (tocar, pausar, pular, legenda, qualidade) e recebe o estado a cada meio segundo.
+     Fica no GitHub Pages porque esses sites só tocam vídeos incorporados em páginas com endereço de verdade.
+     Estados: 1 tocando, 2 pausado, 3 carregando, 0 terminou, 5 pronto. Legenda e qualidade são de cada pessoa. -->
 <div id="p"></div>
 <script>
-  (function () {
-    var player = null, ready = false, parentWin = window.parent, lastTitle = '';
-    var post = function (o) { try { parentWin.postMessage(Object.assign({ telaoJunto: 1 }, o), '*'); } catch (e) {} };
-    var q = new URLSearchParams(location.search);
+(function () {
+  var q = new URLSearchParams(location.search);
+  var kind = q.get('k') || 'yt', id = q.get('v') || '', url = q.get('u') || '';
+  var post = function (o) { try { parent.postMessage(Object.assign({ telaoJunto: 1 }, o), '*'); } catch (e) {} };
+  var load = function (src, cb) { var s = document.createElement('script'); s.src = src; s.onload = cb; s.onerror = function () { post({ type: 'error', code: 'script' }); }; document.head.appendChild(s); };
+  var A = null; // adaptador do site
+  var last = { title: '', tracks: '', levels: '' };
+
+  /* ---------------- YouTube ---------------- */
+  function youtube() {
+    var QN = { highres: '4K+', hd2160: '4K', hd1440: '1440p', hd1080: '1080p', hd720: '720p', large: '480p', medium: '360p', small: '240p', tiny: '144p' };
+    var pl, ready = false, wantCc = null, wantQ = 'auto';
+    var applyCc = function () { try { if (wantCc) { pl.loadModule('captions'); pl.setOption('captions', 'track', { languageCode: wantCc }); } else pl.setOption('captions', 'track', {}); } catch (e) {} };
     window.onYouTubeIframeAPIReady = function () {
-      player = new YT.Player('p', {
-        videoId: q.get('v') || '',
-        playerVars: { autoplay: 0, controls: 0, disablekb: 1, fs: 0, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, origin: location.origin },
+      pl = new YT.Player('p', {
+        videoId: id,
+        playerVars: { autoplay: 0, controls: 0, disablekb: 1, fs: 0, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, cc_load_policy: 0, hl: 'pt-BR', cc_lang_pref: 'pt', origin: location.origin },
         events: {
-          onReady: function () { ready = true; post({ type: 'ready' }); },
-          onStateChange: function (e) { post({ type: 'state', state: e.data }); },
+          onReady: function () { ready = true; post({ type: 'ready' }); try { pl.loadModule('captions'); } catch (e) {} applyCc(); },
+          onStateChange: function (e) { if (e.data === 1) applyCc(); },
+          onApiChange: applyCc,
           onError: function (e) { post({ type: 'error', code: e.data }); },
         },
       });
     };
-    setInterval(function () {
-      if (!ready) return;
-      var d = player.getVideoData ? player.getVideoData() : null;
-      var title = d && d.title || '';
-      post({ type: 'tick', time: player.getCurrentTime(), duration: player.getDuration(), state: player.getPlayerState(), title: title !== lastTitle ? (lastTitle = title) : undefined });
-    }, 500);
-    window.addEventListener('message', function (e) {
-      var m = e.data; if (!m || !m.telaoCmd || !ready) return;
-      if (m.cmd === 'load') player.cueVideoById({ videoId: m.id, startSeconds: m.t || 0 });
-      if (m.cmd === 'play') player.playVideo();
-      if (m.cmd === 'pause') player.pauseVideo();
-      if (m.cmd === 'seek') player.seekTo(m.t, true);
-      if (m.cmd === 'volume') { player.setVolume(Math.round(m.v * 100)); if (m.v > 0) player.unMute(); else player.mute(); }
+    load('https://www.youtube.com/iframe_api');
+    return {
+      ready: function () { return ready; },
+      play: function () { pl.playVideo(); }, pause: function () { pl.pauseVideo(); }, seek: function (t) { pl.seekTo(t, true); },
+      volume: function (v) { pl.setVolume(Math.round(v * 100)); if (v > 0) pl.unMute(); else pl.mute(); },
+      time: function () { return pl.getCurrentTime(); }, duration: function () { return pl.getDuration(); },
+      state: function () { var s = pl.getPlayerState(); return s === -1 ? 5 : s; },
+      title: function () { var d = pl.getVideoData && pl.getVideoData(); return d && d.title || ''; },
+      tracks: function () { try { return (pl.getOption('captions', 'tracklist') || []).map(function (t) { return { code: t.languageCode, name: (t.displayName || t.languageName || t.languageCode) + (t.kind === 'asr' ? ' (automática)' : '') }; }); } catch (e) { return []; } },
+      levels: function () { return (pl.getAvailableQualityLevels() || []).filter(function (l) { return l !== 'auto'; }).map(function (l) { return { id: l, label: QN[l] || l }; }); },
+      quality: function () { return QN[pl.getPlaybackQuality()] || ''; },
+      setCaptions: function (lang) { wantCc = lang || null; applyCc(); },
+      setQuality: function (qq) {
+        wantQ = qq || 'auto';
+        pl.setPlaybackQuality(wantQ === 'auto' ? 'default' : wantQ);
+        if (wantQ === 'auto') return;
+        // o YouTube costuma ignorar o pedido simples: recarrega no mesmo ponto pedindo a qualidade
+        setTimeout(function () {
+          if (pl.getPlaybackQuality() === wantQ) return;
+          var t = pl.getCurrentTime(), playing = pl.getPlayerState() === 1;
+          var o = { videoId: id, startSeconds: t, suggestedQuality: wantQ };
+          if (playing) pl.loadVideoById(o); else pl.cueVideoById(o);
+          setTimeout(applyCc, 1200);
+        }, 1500);
+      },
+    };
+  }
+
+  /* ---------------- Twitch (vídeos gravados e canais ao vivo) ---------------- */
+  function twitch() {
+    var pl, ready = false, live = !/^\d+$/.test(id);
+    load('https://player.twitch.tv/js/embed/v1.js', function () {
+      var o = { width: '100%', height: '100%', parent: [location.hostname], autoplay: false, muted: false };
+      if (live) o.channel = id; else o.video = 'v' + id;
+      pl = new Twitch.Player('p', o);
+      pl.addEventListener(Twitch.Player.READY, function () { ready = true; post({ type: 'ready' }); });
     });
-    var s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(s);
-  })();
+    return {
+      live: live,
+      ready: function () { return ready; },
+      play: function () { pl.play(); }, pause: function () { pl.pause(); }, seek: function (t) { if (!live) pl.seek(t); },
+      volume: function (v) { pl.setVolume(v); pl.setMuted(v === 0); },
+      time: function () { return pl.getCurrentTime() || 0; }, duration: function () { return live ? 0 : (pl.getDuration() || 0); },
+      state: function () { return pl.getEnded() ? 0 : pl.isPaused() ? 2 : 1; },
+      title: function () { return live ? 'Twitch · ' + id + ' (ao vivo)' : 'Twitch · vídeo ' + id; },
+      tracks: function () { return []; },
+      levels: function () { return (pl.getQualities() || []).filter(function (l) { return l.group !== 'auto'; }).map(function (l) { return { id: l.group, label: l.name }; }); },
+      quality: function () { var c = pl.getQuality(); var l = (pl.getQualities() || []).filter(function (x) { return x.group === c; })[0]; return l ? l.name : ''; },
+      setCaptions: function () {}, setQuality: function (qq) { pl.setQuality(qq === 'auto' ? 'auto' : qq); },
+    };
+  }
+
+  /* ---------------- Vimeo ---------------- */
+  function vimeo() {
+    var pl, ready = false, st = { t: 0, d: 0, s: 5, title: '', tracks: [], levels: [], q: '' };
+    load('https://player.vimeo.com/api/player.js', function () {
+      pl = new Vimeo.Player('p', { id: +id, autopause: false, controls: false, dnt: true, title: false, byline: false, portrait: false });
+      pl.ready().then(function () {
+        ready = true; post({ type: 'ready' });
+        pl.getVideoTitle().then(function (x) { st.title = x; });
+        pl.getDuration().then(function (x) { st.d = x; });
+        pl.getTextTracks().then(function (l) { st.tracks = l.map(function (t) { return { code: t.language, name: t.label + (t.kind === 'captions' ? ' (CC)' : '') }; }); });
+        pl.getQualities().then(function (l) { st.levels = l.filter(function (x) { return x.id !== 'auto'; }).map(function (x) { return { id: x.id, label: x.label }; }); }).catch(function () {});
+      }).catch(function () { post({ type: 'error', code: 'vimeo' }); });
+      pl.on('timeupdate', function (d) { st.t = d.seconds; st.d = d.duration; });
+      pl.on('play', function () { st.s = 1; }); pl.on('pause', function () { st.s = 2; }); pl.on('ended', function () { st.s = 0; });
+      pl.on('bufferstart', function () { st.s = 3; }); pl.on('bufferend', function () { pl.getPaused().then(function (p) { st.s = p ? 2 : 1; }); });
+      pl.on('qualitychange', function (e) { st.q = e.quality; });
+    });
+    return {
+      ready: function () { return ready; },
+      play: function () { pl.play().catch(function () {}); }, pause: function () { pl.pause().catch(function () {}); },
+      seek: function (t) { st.t = t; pl.setCurrentTime(t).catch(function () {}); }, volume: function (v) { pl.setVolume(v).catch(function () {}); },
+      time: function () { return st.t; }, duration: function () { return st.d; }, state: function () { return st.s; }, title: function () { return st.title; },
+      tracks: function () { return st.tracks; }, levels: function () { return st.levels; }, quality: function () { return st.q; },
+      setCaptions: function (lang) { (lang ? pl.enableTextTrack(lang) : pl.disableTextTrack()).catch(function () {}); },
+      setQuality: function (qq) { pl.setQuality(qq).catch(function () { post({ type: 'note', text: 'O dono deste vídeo no Vimeo não deixa escolher a qualidade.' }); }); },
+    };
+  }
+
+  /* ---------------- transmissão .m3u8 (HLS) ---------------- */
+  function hls() {
+    var v = document.createElement('video'); v.playsInline = true; document.body.appendChild(v);
+    var h = null, ready = false;
+    var onReady = function () { if (!ready) { ready = true; post({ type: 'ready' }); } };
+    v.addEventListener('loadedmetadata', onReady);
+    v.addEventListener('error', function () { post({ type: 'error', code: 'hls' }); });
+    if (v.canPlayType('application/vnd.apple.mpegurl')) v.src = url;
+    else load('https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js', function () {
+      h = new Hls({ subtitleDisplay: false }); h.loadSource(url); h.attachMedia(v);
+      h.on(Hls.Events.ERROR, function (e, d) { if (d.fatal) post({ type: 'error', code: 'hls' }); });
+    });
+    return {
+      live: false,
+      ready: function () { return ready; },
+      play: function () { v.play().catch(function () {}); }, pause: function () { v.pause(); }, seek: function (t) { v.currentTime = t; },
+      volume: function (x) { v.volume = x; v.muted = x === 0; },
+      time: function () { return v.currentTime; }, duration: function () { return isFinite(v.duration) ? v.duration : 0; },
+      state: function () { return v.ended ? 0 : v.paused ? 2 : v.readyState < 3 ? 3 : 1; },
+      title: function () { return decodeURIComponent((url.split('/').pop() || 'Transmissão').split('?')[0]); },
+      tracks: function () { return h ? h.subtitleTracks.map(function (t, i) { return { code: String(i), name: t.name || t.lang || ('Legenda ' + (i + 1)) }; }) : []; },
+      levels: function () { return h ? h.levels.map(function (l, i) { return { id: String(i), label: (l.height ? l.height + 'p' : Math.round(l.bitrate / 1000) + ' kbps') }; }) : []; },
+      quality: function () { return h && h.currentLevel >= 0 && h.levels[h.currentLevel] ? (h.levels[h.currentLevel].height + 'p') : ''; },
+      setCaptions: function (lang) { if (!h) return; h.subtitleDisplay = !!lang; h.subtitleTrack = lang ? +lang : -1; },
+      setQuality: function (qq) { if (h) h.currentLevel = qq === 'auto' ? -1 : +qq; },
+    };
+  }
+
+  /* ---------------- Kick (só ao vivo, sem controle remoto) ---------------- */
+  function kick() {
+    var f = document.createElement('iframe');
+    f.src = 'https://player.kick.com/' + encodeURIComponent(id) + '?autoplay=true';
+    f.allow = 'autoplay; fullscreen'; document.getElementById('p').appendChild(f);
+    setTimeout(function () { post({ type: 'ready' }); }, 500);
+    return {
+      live: true, noControl: true,
+      ready: function () { return true; }, play: function () {}, pause: function () {}, seek: function () {}, volume: function () {},
+      time: function () { return 0; }, duration: function () { return 0; }, state: function () { return 1; },
+      title: function () { return 'Kick · ' + id + ' (ao vivo)'; }, tracks: function () { return []; }, levels: function () { return []; },
+      quality: function () { return ''; }, setCaptions: function () {}, setQuality: function () {},
+    };
+  }
+
+  A = ({ yt: youtube, twitch: twitch, vimeo: vimeo, hls: hls, kick: kick }[kind] || youtube)();
+
+  setInterval(function () {
+    if (!A || !A.ready()) return;
+    try {
+      var title = A.title(), tr = A.tracks(), lv = A.levels(), trs = JSON.stringify(tr), lvs = JSON.stringify(lv);
+      post({
+        type: 'tick', time: A.time(), duration: A.duration(), state: A.state(), quality: A.quality(),
+        live: !!A.live, noControl: !!A.noControl,
+        title: title !== last.title ? (last.title = title) : undefined,
+        tracks: trs !== last.tracks ? (last.tracks = trs, tr) : undefined,
+        levels: lvs !== last.levels ? (last.levels = lvs, lv) : undefined,
+      });
+    } catch (e) {}
+  }, 500);
+
+  window.addEventListener('message', function (e) {
+    var m = e.data; if (!m || !m.telaoCmd || !A || !A.ready()) return;
+    try {
+      if (m.cmd === 'play') A.play();
+      if (m.cmd === 'pause') A.pause();
+      if (m.cmd === 'seek') A.seek(m.t);
+      if (m.cmd === 'volume') A.volume(m.v);
+      if (m.cmd === 'captions') A.setCaptions(m.lang || null);
+      if (m.cmd === 'quality') A.setQuality(m.q || 'auto');
+    } catch (err) {}
+  });
+})();
 </script>
 </body>
 </html>
